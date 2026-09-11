@@ -4,10 +4,12 @@ param customerCode = 'pilot'
 param environment = 'tst'
 param location = 'swedencentral'
 param regionCode = 'swec'
-param containerRegistryName = 'acrlyhyttstmrfj6hm3oed7q'
-param containerRegistryResourceGroupName = 'rg-lyhyt-platform-tst-swec'
-param containerRegistryLoginServer = 'acrlyhyttstmrfj6hm3oed7q.azurecr.io'
-param containerImage = 'acrlyhyttstmrfj6hm3oed7q.azurecr.io/pilot/hello:2026-09-11-1'
+
+// Replace these placeholders with values from the shared platform deployment.
+param containerRegistryName = 'replacewithacrname'
+param containerRegistryResourceGroupName = 'replace-with-platform-resource-group'
+param containerRegistryLoginServer = 'replacewithacrname.azurecr.io'
+param containerImage = 'replacewithacrname.azurecr.io/pilot/your-image:your-tag'
 
 param additionalTags = {
   workload: 'customer-runtime'

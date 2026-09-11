@@ -1,4 +1,5 @@
 .venv/
 reference/exports/
+docs/superpowers/plans/
 .DS_Store
 *.local.bicepparam
