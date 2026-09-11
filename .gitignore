@@ -1,0 +1,4 @@
+.venv/
+reference/exports/
+.DS_Store
+*.local.bicepparam
