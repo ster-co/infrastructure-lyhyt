@@ -11,6 +11,13 @@ param environment string
 param customerCode string
 param location string
 param regionCode string
+param vnetAddressPrefix string
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param publicNetworkAccess string
+param zoneRedundant bool
 param containerRegistryName string
 param containerRegistryResourceGroupName string
 param containerRegistryLoginServer string
@@ -44,6 +51,19 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2025-11-01' e
   scope: resourceGroup(containerRegistryResourceGroupName)
 }
 
+module networking './modules/networking.bicep' = {
+  name: 'deploy-networking-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    customerCode: customerCode
+    environment: environment
+    location: location
+    regionCode: regionCode
+    vnetAddressPrefix: vnetAddressPrefix
+    additionalTags: commonTags
+  }
+}
+
 module monitoring './modules/monitoring.bicep' = {
   name: 'deploy-monitoring-${customerCode}-${environment}'
   scope: customerRuntimeResourceGroup
@@ -63,6 +83,9 @@ module containerEnvironment './modules/container-environment.bicep' = {
     tags: commonTags
     logAnalyticsCustomerId: monitoring.outputs.workspaceCustomerId
     logAnalyticsSharedKey: monitoring.outputs.workspaceSharedKey
+    infrastructureSubnetId: networking.outputs.containerAppsSubnetId
+    publicNetworkAccess: publicNetworkAccess
+    zoneRedundant: zoneRedundant
   }
 }
 

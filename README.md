@@ -11,6 +11,24 @@ Azure Bicep templates for the LYHYT shared platform, customer foundation, and cu
 
 Each entry point is subscription-scoped and has an example parameter file under its `environments/` directory.
 
+The customer runtime requires an explicit `vnetAddressPrefix`. Allocate a unique, non-overlapping range for every customer and environment; do not derive it from a customer code, environment name, or hash. The example uses `10.20.0.0/21` and deterministically derives this topology:
+
+```text
+VNet:                              10.20.0.0/21
+Container Apps infrastructure:    cidrSubnet(prefix, 23, 0) -> 10.20.0.0/23
+Private Endpoints:                 cidrSubnet(prefix, 24, 4) -> 10.20.4.0/24
+```
+
+The second `cidrSubnet` argument is the absolute new prefix length, so `23` and `24` derive `/23` and `/24` from the `/21` VNet prefix.
+
+The infrastructure subnet is delegated to `Microsoft.App/environments` and is used exclusively by the external Workload Profiles Container Apps Environment with its `Consumption` workload profile. The temporary TST pilot explicitly uses `internal: false`, `publicNetworkAccess: 'Enabled'`, `zoneRedundant: false`, and external Container App ingress. Production parameter files must choose `publicNetworkAccess` and `zoneRedundant` explicitly.
+
+The final Front Door Premium route is intended to use Private Link. That transition will set `publicNetworkAccess` to `Disabled` while retaining the external Environment VIP type (`internal: false`). Front Door, Private Link, Private Endpoints, and Private DNS are not created by this pilot configuration.
+
+The address space between the two subnets is intentionally reserved for future runtime networking requirements. The pilot leaves `dockerBridgeCidr`, `platformReservedCidr`, and `platformReservedDnsIP` unset so Azure manages those platform CIDR defaults. Before production peering or VPN integration, perform explicit non-overlapping IP planning and parameterize those ranges.
+
+The pilot uses direct same-tenant Managed Identity RBAC for LYHYT-owned resources such as ACR. Workload identity federation for cross-tenant access is deliberately not implemented yet.
+
 ## Prerequisites
 
 - Azure CLI with Bicep support (`az bicep version`)
