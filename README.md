@@ -4,7 +4,7 @@ Azure Bicep templates for the LYHYT shared platform, customer foundation, and cu
 
 ## Repository layout
 
-- `infra/lyhyt-platform/` provisions the shared platform resource group and Azure Container Registry.
+- `infra/lyhyt-platform/` provisions the shared platform resource group, Azure Container Registry, and optional shared platform Key Vault.
 - `infra/customer-foundation/` provisions customer-scoped Storage, Key Vault, Azure SQL, AI Services, Document Intelligence, and AI model deployments.
 - `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Container Apps Environment, managed identity, ACR pull access, and the customer Container App.
 - `reference/exports/` contains exported Azure reference templates for comparison only and is excluded from Git.
@@ -29,6 +29,8 @@ The address space between the two subnets is intentionally reserved for future r
 
 The pilot uses direct same-tenant Managed Identity RBAC for LYHYT-owned resources such as ACR. Workload identity federation for cross-tenant access is deliberately not implemented yet.
 
+The runtime uses one user-assigned managed identity per customer. The dual-Key-Vault configuration is application-level: Bicep passes only the UAMI client ID, customer/platform vault resource IDs, vault URIs, and feature flags. The application reads secrets itself through `DefaultAzureCredential` and `SecretClient`; Container App `keyVaultUrl` references are intentionally not configured. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the exact contract, secret-name allowlists, RBAC boundaries, and deployment handoff.
+
 ## Prerequisites
 
 - Azure CLI with Bicep support (`az bicep version`)
@@ -52,11 +54,14 @@ az bicep build-params --file infra/customer-foundation/environments/customer.exa
 az bicep lint --file infra/lyhyt-customer-runtime/main.bicep
 az bicep build --file infra/lyhyt-customer-runtime/main.bicep --stdout > /dev/null
 az bicep build-params --file infra/lyhyt-customer-runtime/environments/customer.example.bicepparam --stdout > /dev/null
+
+python3 -m unittest discover -s tests -v
+git diff --check
 ```
 
 ## Deployment order
 
-Deploy the shared platform first, then the customer foundation, and finally the customer runtime. Review and customize each parameter file before deployment. The customer runtime parameter file expects the registry created by the platform deployment and a fully qualified container image.
+Deploy the shared platform first, then run the runtime once with Key Vault integration disabled to create the per-customer UAMI. Use its safe identity outputs for the customer foundation access handoff, resolve both vault IDs/URIs, and redeploy the runtime with integration and applicable RBAC enabled. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Populate Key Vault secrets later through a secured workflow; keep `REQUIRE_KEY_VAULT=false` until application validation and restart the Container App after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
 
 ### 1. Shared platform
 

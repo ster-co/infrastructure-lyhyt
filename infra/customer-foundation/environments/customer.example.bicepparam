@@ -13,6 +13,13 @@ param sqlEntraAdministratorPrincipalType = 'User'
 param sqlEntraAdministratorTenantId = '00000000-0000-0000-0000-000000000000'
 param sqlEntraOnlyAuthentication = true
 
+param keyVaultEnablePurgeProtection = true
+
+// Same-tenant pilot handoff. Keep disabled until the runtime UAMI exists and
+// its principal ID is supplied from the runtime deployment output.
+param runtimeAccessPrincipalId = '00000000-0000-0000-0000-000000000000'
+param enableSameTenantRuntimeKeyVaultRoleAssignment = false
+
 // Selected from the reference configuration; workload-specific containers are omitted.
 param storageContainerNames = [
   'rag-files'

@@ -7,6 +7,30 @@ param containerRegistryLoginServer string
 param containerImage string
 param customerCode string
 param environment string
+param keyVaultIntegrationEnabled bool
+param managedIdentityClientId string
+param customerKeyVaultUri string
+param platformKeyVaultUri string
+param requireKeyVault bool
+
+var keyVaultEnvironmentVariables = keyVaultIntegrationEnabled ? [
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: managedIdentityClientId
+  }
+  {
+    name: 'CLIENT_KEY_VAULT_URI'
+    value: customerKeyVaultUri
+  }
+  {
+    name: 'PLATFORM_KEY_VAULT_URI'
+    value: platformKeyVaultUri
+  }
+  {
+    name: 'REQUIRE_KEY_VAULT'
+    value: requireKeyVault ? 'true' : 'false'
+  }
+] : []
 
 resource containerApp 'Microsoft.App/containerapps@2026-01-01' = {
   name: containerAppName
@@ -46,7 +70,7 @@ resource containerApp 'Microsoft.App/containerapps@2026-01-01' = {
         {
           name: 'api'
           image: containerImage
-          env: [
+          env: concat([
             {
               name: 'CUSTOMER_CODE'
               value: customerCode
@@ -55,7 +79,7 @@ resource containerApp 'Microsoft.App/containerapps@2026-01-01' = {
               name: 'ENVIRONMENT'
               value: environment
             }
-          ]
+          ], keyVaultEnvironmentVariables)
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'

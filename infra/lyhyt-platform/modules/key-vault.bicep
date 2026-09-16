@@ -13,8 +13,10 @@ param publicNetworkAccess string = 'Enabled'
   'Allow'
   'Deny'
 ])
-param networkDefaultAction string = 'Deny'
+param networkDefaultAction string = 'Allow'
 
+@minValue(7)
+@maxValue(90)
 param softDeleteRetentionInDays int = 90
 param enablePurgeProtection bool = true
 
