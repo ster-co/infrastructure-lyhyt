@@ -291,8 +291,6 @@ jobs:
       sqlDatabaseResourceId: ${{ steps.apply.outputs.sqlDatabaseResourceId }}
       customerKeyVaultResourceId: ${{ steps.apply.outputs.customerKeyVaultResourceId }}
       customerKeyVaultUri: ${{ steps.apply.outputs.customerKeyVaultUri }}
-      searchEndpoint: ${{ steps.apply.outputs.searchEndpoint }}
-      aiEndpoint: ${{ steps.apply.outputs.aiEndpoint }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -388,6 +386,17 @@ jobs:
               for name, value in safe.items():
                   output.write(f"{name}={value}\n")
           PY
+
+      - name: Publish safe customer resource configuration
+        env:
+          CUSTOMER_KEY_VAULT_NAME: ${{ steps.apply.outputs.customerKeyVaultName }}
+          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/pipeline/publish_customer_configuration.py \
+            --outputs "$FOUNDATION_OUTPUTS_FILE" \
+            --vault-name "$CUSTOMER_KEY_VAULT_NAME"
 
   sql_migration_preflight:
     needs: [resolve, customer_foundation_apply]
@@ -670,8 +679,6 @@ jobs:
           RUNTIME_KEY_VAULT_ENABLED: ${{ needs.resolve.outputs.runtime_key_vault_enabled }}
           FOUNDATION_KEY_VAULT_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultResourceId }}
           FOUNDATION_KEY_VAULT_URI: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultUri }}
-          FOUNDATION_SEARCH_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.searchEndpoint }}
-          FOUNDATION_AI_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.aiEndpoint }}
           LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
@@ -734,10 +741,6 @@ jobs:
               key_vault["requireKeyVault"] = False
               parameters["enablePlatformKeyVaultRoleAssignment"] = False
           parameters["keyVaultConfiguration"] = key_vault
-          tags = dict(parameters.get("additionalTags", {}))
-          tags["foundationSearchEndpoint"] = os.environ["FOUNDATION_SEARCH_ENDPOINT"]
-          tags["foundationAiEndpoint"] = os.environ["FOUNDATION_AI_ENDPOINT"]
-          parameters["additionalTags"] = tags
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep lint --file "$RUNTIME_TEMPLATE"

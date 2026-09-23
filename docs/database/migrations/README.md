@@ -290,14 +290,18 @@ foundation exist. Follow this order:
    read-only customer Key Vault role assignment when required. A future
    cross-tenant deployment must use the customer-side enterprise application
    principal, not assume that the LYHYT UAMI can receive customer-tenant RBAC.
-4. Read the customer and platform Key Vault IDs and URIs from their own
-   deployment outputs and pass those safe values together to the final runtime
-   deployment. Never pass secret values through Bicep.
-5. Redeploy the runtime with Key Vault integration enabled and
+4. Publish safe customer-resource configuration from the foundation apply
+   outputs into the customer Key Vault using the explicit allowlist and drift
+   guard. Never pass secret values through Bicep or workflow outputs.
+5. Read the customer and platform Key Vault IDs and URIs from their own
+   deployment outputs and pass those safe bootstrap values together to the
+   final runtime deployment. Do not pass customer endpoints as runtime tags or
+   application settings.
+6. Redeploy the runtime with Key Vault integration enabled and
    `requireKeyVault=false`. Populate the documented allowlisted secrets later
    through a secured secret-management workflow, restart the Container App,
    and validate startup and application behavior.
-6. Set `requireKeyVault=true` only after validation. Keep it false in examples
+7. Set `requireKeyVault=true` only after validation. Keep it false in examples
    and during bootstrap.
 
 See [`docs/key-vault-contract.md`](../../key-vault-contract.md) for the full

@@ -118,6 +118,8 @@ var acrPullRoleDefinitionId = subscriptionResourceId(containerRegistrySubscripti
 var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId(platformKeyVaultSubscriptionId, 'Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var acrPullRoleAssignmentName = guid(containerRegistryReference.resourceId, identityName, acrPullRoleDefinitionId)
 var platformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, identityName, keyVaultSecretsUserRoleDefinitionId)
+var documentParserPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, documentParserIdentityName, keyVaultSecretsUserRoleDefinitionId)
+var mailboxSyncPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, mailboxSyncIdentityName, keyVaultSecretsUserRoleDefinitionId)
 var platformKeyVaultRoleAssignmentEnabled = enablePlatformKeyVaultRoleAssignment && keyVaultConfiguration.enabled
 
 resource customerRuntimeResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
@@ -261,12 +263,34 @@ module platformKeyVaultRoleAssignment './modules/key-vault-role-assignment.bicep
   }
 }
 
+module documentParserPlatformKeyVaultRoleAssignment './modules/key-vault-role-assignment.bicep' = if (platformKeyVaultRoleAssignmentEnabled) {
+  name: 'assign-document-parser-platform-key-vault-secrets-user-${customerCode}-${environment}'
+  scope: resourceGroup(platformKeyVaultSubscriptionId, platformKeyVaultResourceGroupName)
+  params: {
+    keyVaultResourceId: keyVaultConfiguration.platformKeyVaultResourceId
+    roleAssignmentName: documentParserPlatformKeyVaultRoleAssignmentName
+    principalId: documentParserIdentity.outputs.identityPrincipalId
+  }
+}
+
+module mailboxSyncPlatformKeyVaultRoleAssignment './modules/key-vault-role-assignment.bicep' = if (platformKeyVaultRoleAssignmentEnabled) {
+  name: 'assign-mailbox-sync-platform-key-vault-secrets-user-${customerCode}-${environment}'
+  scope: resourceGroup(platformKeyVaultSubscriptionId, platformKeyVaultResourceGroupName)
+  params: {
+    keyVaultResourceId: keyVaultConfiguration.platformKeyVaultResourceId
+    roleAssignmentName: mailboxSyncPlatformKeyVaultRoleAssignmentName
+    principalId: mailboxSyncIdentity.outputs.identityPrincipalId
+  }
+}
+
 module containerApp './modules/container-app.bicep' = {
   name: 'deploy-container-app-${customerCode}-${environment}'
   scope: customerRuntimeResourceGroup
   dependsOn: [
     acrPullRoleAssignment
     platformKeyVaultRoleAssignment
+    documentParserPlatformKeyVaultRoleAssignment
+    mailboxSyncPlatformKeyVaultRoleAssignment
   ]
   params: {
     containerAppName: containerAppName
@@ -291,6 +315,7 @@ module documentParserFunctionApp './modules/function-app.bicep' = {
   scope: customerRuntimeResourceGroup
   dependsOn: [
     documentParserHostStorageRoleAssignment
+    documentParserPlatformKeyVaultRoleAssignment
   ]
   params: {
     functionAppName: documentParserFunctionAppName
@@ -309,7 +334,10 @@ module documentParserFunctionApp './modules/function-app.bicep' = {
     customerHostname: functionConfiguration.customerHostname
     allowedGroupIds: functionConfiguration.allowedGroupIds
     deploymentTier: functionConfiguration.deploymentTier
+    keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
+    customerKeyVaultUri: keyVaultConfiguration.customerKeyVaultUri
     providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
+    requireKeyVault: keyVaultConfiguration.requireKeyVault
     hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
     hostStorageQueueServiceUri: functionHostStorage.outputs.queueServiceUri
     hostStorageTableServiceUri: functionHostStorage.outputs.tableServiceUri
@@ -321,6 +349,7 @@ module mailboxSyncFunctionApp './modules/function-app.bicep' = {
   scope: customerRuntimeResourceGroup
   dependsOn: [
     mailboxSyncHostStorageRoleAssignment
+    mailboxSyncPlatformKeyVaultRoleAssignment
   ]
   params: {
     functionAppName: mailboxSyncFunctionAppName
@@ -339,7 +368,10 @@ module mailboxSyncFunctionApp './modules/function-app.bicep' = {
     customerHostname: functionConfiguration.customerHostname
     allowedGroupIds: functionConfiguration.allowedGroupIds
     deploymentTier: functionConfiguration.deploymentTier
+    keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
+    customerKeyVaultUri: keyVaultConfiguration.customerKeyVaultUri
     providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
+    requireKeyVault: keyVaultConfiguration.requireKeyVault
     hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
     hostStorageQueueServiceUri: functionHostStorage.outputs.queueServiceUri
     hostStorageTableServiceUri: functionHostStorage.outputs.tableServiceUri

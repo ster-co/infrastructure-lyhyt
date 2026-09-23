@@ -1,6 +1,7 @@
 .venv/
 reference/exports/
 docs/superpowers/plans/
+docs/key-vault-contract.md
 .DS_Store
 *.local.bicepparam
 AGENTS.md
