@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "migrations": [
+    {
+      "sequence": 1,
+      "id": "0001_baseline",
+      "file": "docs/database/0001_baseline.sql",
+      "transactional": true,
+      "destructive": false,
+      "minimumRelease": "2026.09.23"
+    }
+  ]
+}

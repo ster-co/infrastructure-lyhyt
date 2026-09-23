@@ -1,0 +1,749 @@
+name: Customer foundation SQL and runtime
+
+run-name: Deploy ${{ inputs.customer_id }}/${{ inputs.environment }} from ${{ github.ref_name }}
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: Customer catalog identifier
+        required: true
+        type: string
+      environment:
+        description: Customer environment
+        required: true
+        type: string
+        # Must be a key present for the selected customer in
+        # config/customers.json; the resolver rejects missing records.
+
+env:
+  CATALOG_PATH: config/customers.json
+  FOUNDATION_TEMPLATE: infra/customer-foundation/main.bicep
+  RUNTIME_TEMPLATE: infra/lyhyt-customer-runtime/main.bicep
+  FOUNDATION_MANIFEST: docs/database/migrations/manifest.json
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.resolve.outputs.release_version }}
+      customer_tenant_id: ${{ steps.resolve.outputs.customer_tenant_id }}
+      customer_subscription_id: ${{ steps.resolve.outputs.customer_subscription_id }}
+      location: ${{ steps.resolve.outputs.location }}
+      region_code: ${{ steps.resolve.outputs.region_code }}
+      migration_application_client_id: ${{ steps.resolve.outputs.migration_application_client_id }}
+      migration_principal_object_id: ${{ steps.resolve.outputs.migration_principal_object_id }}
+      needs_runtime_bootstrap: ${{ steps.resolve.outputs.needs_runtime_bootstrap }}
+      same_tenant_rbac_enabled: ${{ steps.resolve.outputs.same_tenant_rbac_enabled }}
+      runtime_key_vault_enabled: ${{ steps.resolve.outputs.runtime_key_vault_enabled }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Reject non-release refs
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+            exit 0
+          fi
+          echo "This workflow may run only from a release tag named v*." >&2
+          exit 1
+
+      - name: Resolve customer catalog
+        id: resolve
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer.json"
+          python3 scripts/pipeline/resolve_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          runtime = resolved["runtimeParameters"]
+          foundation = resolved["foundationParameters"]
+          key_vault = runtime["keyVaultConfiguration"]
+          needs_bootstrap = bool(key_vault["enabled"] or foundation.get(
+              "enableSameTenantRuntimeKeyVaultRoleAssignment", False
+          ))
+          values = {
+              "release_version": resolved["releaseVersion"],
+              "customer_tenant_id": resolved["customerTenantId"],
+              "customer_subscription_id": resolved["subscriptionId"],
+              "location": resolved["location"],
+              "region_code": resolved["regionCode"],
+              "migration_application_client_id": resolved["migration"]["applicationClientId"],
+              "migration_principal_object_id": resolved["migration"]["principalObjectId"],
+              "needs_runtime_bootstrap": str(needs_bootstrap).lower(),
+              "same_tenant_rbac_enabled": str(bool(
+                  foundation.get("enableSameTenantRuntimeKeyVaultRoleAssignment", False)
+              )).lower(),
+              "runtime_key_vault_enabled": str(key_vault["enabled"]).lower(),
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+  lyhyt_runtime_bootstrap:
+    needs: resolve
+    if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      identity_principal_id: ${{ steps.bootstrap.outputs.identity_principal_id }}
+      identity_client_id: ${{ steps.bootstrap.outputs.identity_client_id }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to LYHYT tenant for runtime bootstrap
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.LYHYT_RUNTIME_SUBSCRIPTION_ID }}
+
+      - name: Bootstrap runtime identity without Key Vault integration
+        id: bootstrap
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          BOOTSTRAP_OUTPUT_FILE: ${{ runner.temp }}/runtime-bootstrap-outputs.json
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/lyhyt-customer-runtime/environments/.customer-runtime-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer.json"
+          python3 scripts/pipeline/resolve_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          try:
+              resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              runtime = resolved["runtimeParameters"]
+              validate_resource_id_subscription(
+                  runtime["containerRegistryReference"]["resourceId"],
+                  os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
+                  "Microsoft.ContainerRegistry",
+              )
+              key_vault = runtime["keyVaultConfiguration"]
+              if key_vault["enabled"] or runtime["enablePlatformKeyVaultRoleAssignment"]:
+                  validate_resource_id_subscription(
+                      key_vault["platformKeyVaultResourceId"],
+                      os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
+                      "Microsoft.KeyVault",
+                  )
+          except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit("LYHYT shared resource validation failed") from None
+          PY
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["runtimeParameters"])
+          key_vault = dict(parameters["keyVaultConfiguration"])
+          key_vault["enabled"] = False
+          key_vault["requireKeyVault"] = False
+          parameters["keyVaultConfiguration"] = key_vault
+          parameters["enablePlatformKeyVaultRoleAssignment"] = False
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep lint --file "$RUNTIME_TEMPLATE"
+          az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create --parameters "$PARAM_FILE" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$RUNTIME_TEMPLATE" \
+            --query 'properties.outputs.{identityPrincipalId:identityPrincipalId.value,identityClientId:identityClientId.value}' \
+            --output json > "$BOOTSTRAP_OUTPUT_FILE"
+          python3 - "$BOOTSTRAP_OUTPUT_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          values = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          for key in ("identityPrincipalId", "identityClientId"):
+              value = values.get(key)
+              if not isinstance(value, str) or not value:
+                  raise SystemExit("runtime bootstrap did not return the required identity output")
+              output_name = {
+                  "identityPrincipalId": "identity_principal_id",
+                  "identityClientId": "identity_client_id",
+              }[key]
+              with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+                  output.write(f"{output_name}={value}\n")
+          PY
+
+  customer_foundation_what_if:
+    needs: [resolve, lyhyt_runtime_bootstrap]
+    if: ${{ always() && needs.resolve.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for foundation what-if
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Validate customer foundation what-if
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
+          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
+          LYHYT_TENANT_ID: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer.json"
+          python3 scripts/pipeline/resolve_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["foundationParameters"])
+          if os.environ["SAME_TENANT_RBAC_ENABLED"] == "true":
+              customer_tenant_id = resolved["customerTenantId"]
+              lyhyt_tenant_id = os.environ["LYHYT_TENANT_ID"]
+              if not lyhyt_tenant_id or customer_tenant_id.casefold() != lyhyt_tenant_id.casefold():
+                  raise SystemExit("same-tenant runtime Key Vault RBAC requires matching tenants")
+              principal_id = os.environ["BOOTSTRAP_PRINCIPAL_ID"]
+              if not principal_id:
+                  raise SystemExit("runtime bootstrap did not return a principal ID")
+              parameters["runtimeAccessPrincipalId"] = principal_id
+              parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = True
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep lint --file "$FOUNDATION_TEMPLATE"
+          az bicep build --file "$FOUNDATION_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub what-if --parameters "$PARAM_FILE" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$FOUNDATION_TEMPLATE"
+
+  customer_foundation_apply:
+    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_what_if]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.customer_foundation_what_if.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: customer-foundation-apply
+    outputs:
+      sqlServerFqdn: ${{ steps.apply.outputs.sqlServerFqdn }}
+      sqlDatabaseName: ${{ steps.apply.outputs.sqlDatabaseName }}
+      sqlServerResourceId: ${{ steps.apply.outputs.sqlServerResourceId }}
+      sqlDatabaseResourceId: ${{ steps.apply.outputs.sqlDatabaseResourceId }}
+      customerKeyVaultResourceId: ${{ steps.apply.outputs.customerKeyVaultResourceId }}
+      customerKeyVaultUri: ${{ steps.apply.outputs.customerKeyVaultUri }}
+      searchEndpoint: ${{ steps.apply.outputs.searchEndpoint }}
+      aiEndpoint: ${{ steps.apply.outputs.aiEndpoint }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for foundation apply
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Apply customer foundation and capture safe outputs
+        id: apply
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
+          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
+          LYHYT_TENANT_ID: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer.json"
+          python3 scripts/pipeline/resolve_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["foundationParameters"])
+          if os.environ["SAME_TENANT_RBAC_ENABLED"] == "true":
+              customer_tenant_id = resolved["customerTenantId"]
+              lyhyt_tenant_id = os.environ["LYHYT_TENANT_ID"]
+              if not lyhyt_tenant_id or customer_tenant_id.casefold() != lyhyt_tenant_id.casefold():
+                  raise SystemExit("same-tenant runtime Key Vault RBAC requires matching tenants")
+              principal_id = os.environ["BOOTSTRAP_PRINCIPAL_ID"]
+              if not principal_id:
+                  raise SystemExit("runtime bootstrap did not return a principal ID")
+              parameters["runtimeAccessPrincipalId"] = principal_id
+              parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = True
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create --parameters "$PARAM_FILE" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$FOUNDATION_TEMPLATE" \
+            --query properties.outputs \
+            --output json > "$FOUNDATION_OUTPUTS_FILE"
+          python3 - "$FOUNDATION_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$CUSTOMER_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_foundation_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              outputs = extract_foundation_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              )
+              safe = outputs.to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["sqlServerResourceId"], sys.argv[3], "Microsoft.Sql"
+              )
+              validate_resource_id_subscription(
+                  safe["sqlDatabaseResourceId"], sys.argv[3], "Microsoft.Sql"
+              )
+              validate_resource_id_subscription(
+                  safe["customerKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
+              )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("customer foundation returned invalid safe outputs") from None
+
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, value in safe.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+  sql_migration_preflight:
+    needs: [resolve, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL preflight
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Validate SQL resource IDs from foundation apply
+        env:
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          try:
+              validate_resource_id_subscription(
+                  os.environ["SQL_SERVER_RESOURCE_ID"],
+                  os.environ["CUSTOMER_SUBSCRIPTION_ID"],
+                  "Microsoft.Sql",
+              )
+              validate_resource_id_subscription(
+                  os.environ["SQL_DATABASE_RESOURCE_ID"],
+                  os.environ["CUSTOMER_SUBSCRIPTION_ID"],
+                  "Microsoft.Sql",
+              )
+          except ValueError:
+              raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+
+      - name: Run mandatory Python, driver, token, and SQL preflight
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --preflight
+
+  sql_migration_plan:
+    needs: [resolve, customer_foundation_apply, sql_migration_preflight]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_preflight.result == 'success' }}
+    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    outputs:
+      has_destructive_migrations: ${{ steps.plan.outputs.has_destructive_migrations }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL migration plan
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Verify migration manifest
+        id: plan
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          VERIFICATION_FILE: ${{ runner.temp }}/migration-verification.json
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.verify_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --release-version "$RELEASE_VERSION" \
+            --output json > "$VERIFICATION_FILE"
+          python3 - "$VERIFICATION_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          value = result.get("hasDestructiveMigrations")
+          if not isinstance(value, bool):
+              raise SystemExit("migration verification did not return a destructive flag")
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              output.write(f"has_destructive_migrations={str(value).lower()}\n")
+          PY
+
+  sql_migration_execute:
+    needs: [resolve, customer_foundation_apply, sql_migration_plan]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'false' }}
+    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL migrations
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Apply approved non-destructive SQL migrations
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID"
+          python3 -m scripts.sql.apply_stabucodes \
+            --csv-file docs/database/reference/stabucodes.csv \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --output json
+
+  sql_migration_execute_destructive:
+    needs: [resolve, customer_foundation_apply, sql_migration_plan]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'true' }}
+    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    environment:
+      name: sql-migrations-destructive
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for approved destructive migrations
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Apply approved destructive SQL migrations
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --allow-destructive
+          python3 -m scripts.sql.apply_stabucodes \
+            --csv-file docs/database/reference/stabucodes.csv \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --output json
+
+  lyhyt_runtime:
+    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_apply, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to LYHYT tenant for final runtime deployment
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.LYHYT_RUNTIME_SUBSCRIPTION_ID }}
+
+      - name: Deploy final runtime with customer handoff
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          RUNTIME_KEY_VAULT_ENABLED: ${{ needs.resolve.outputs.runtime_key_vault_enabled }}
+          FOUNDATION_KEY_VAULT_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultResourceId }}
+          FOUNDATION_KEY_VAULT_URI: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultUri }}
+          FOUNDATION_SEARCH_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.searchEndpoint }}
+          FOUNDATION_AI_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.aiEndpoint }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/lyhyt-customer-runtime/environments/.customer-runtime-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer.json"
+          python3 scripts/pipeline/resolve_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          try:
+              resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              runtime = resolved["runtimeParameters"]
+              validate_resource_id_subscription(
+                  runtime["containerRegistryReference"]["resourceId"],
+                  os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
+                  "Microsoft.ContainerRegistry",
+              )
+              key_vault = runtime["keyVaultConfiguration"]
+              final_key_vault_enabled = os.environ["RUNTIME_KEY_VAULT_ENABLED"] == "true"
+              final_platform_role_assignment = final_key_vault_enabled and runtime["enablePlatformKeyVaultRoleAssignment"]
+              if final_key_vault_enabled or final_platform_role_assignment:
+                  validate_resource_id_subscription(
+                      key_vault["platformKeyVaultResourceId"],
+                      os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
+                      "Microsoft.KeyVault",
+                  )
+          except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit("LYHYT shared resource validation failed") from None
+          PY
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["runtimeParameters"])
+          key_vault = dict(parameters["keyVaultConfiguration"])
+          key_vault["customerKeyVaultResourceId"] = os.environ["FOUNDATION_KEY_VAULT_RESOURCE_ID"]
+          key_vault["customerKeyVaultUri"] = os.environ["FOUNDATION_KEY_VAULT_URI"]
+          if os.environ["RUNTIME_KEY_VAULT_ENABLED"] == "true":
+              key_vault["enabled"] = True
+          else:
+              key_vault["enabled"] = False
+              key_vault["requireKeyVault"] = False
+              parameters["enablePlatformKeyVaultRoleAssignment"] = False
+          parameters["keyVaultConfiguration"] = key_vault
+          tags = dict(parameters.get("additionalTags", {}))
+          tags["foundationSearchEndpoint"] = os.environ["FOUNDATION_SEARCH_ENDPOINT"]
+          tags["foundationAiEndpoint"] = os.environ["FOUNDATION_AI_ENDPOINT"]
+          parameters["additionalTags"] = tags
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep lint --file "$RUNTIME_TEMPLATE"
+          az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create --parameters "$PARAM_FILE" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$RUNTIME_TEMPLATE" \
+            --output none

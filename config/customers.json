@@ -1,0 +1,109 @@
+{
+  "customers": [
+    {
+      "id": "pilot",
+      "enabled": true,
+      "tenantId": "11111111-1111-1111-1111-111111111111",
+      "migration": {
+        "principalObjectId": "44444444-4444-4444-4444-444444444444",
+        "applicationClientId": "33333333-3333-3333-3333-333333333333"
+      },
+      "environments": {
+        "tst": {
+          "subscriptionId": "22222222-2222-2222-2222-222222222222",
+          "location": "swedencentral",
+          "regionCode": "swec",
+          "foundationParameters": {
+            "sqlEntraAdministratorLogin": "replace-with-customer-entra-admin",
+            "sqlEntraAdministratorObjectId": "00000000-0000-0000-0000-000000000000",
+            "sqlEntraAdministratorPrincipalType": "User",
+            "sqlEntraAdministratorTenantId": "11111111-1111-1111-1111-111111111111",
+            "sqlEntraOnlyAuthentication": true,
+            "storageContainerNames": ["rag-files", "offerte-backups"],
+            "aiDeployments": [
+              {
+                "name": "gpt-5",
+                "model": "gpt-5",
+                "format": "OpenAI",
+                "version": "2025-08-07",
+                "skuName": "GlobalStandard",
+                "capacity": 1000,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "gpt-5.4",
+                "model": "gpt-5.4",
+                "format": "OpenAI",
+                "version": "2026-03-05",
+                "skuName": "GlobalStandard",
+                "capacity": 2000,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "gpt-5-mini",
+                "model": "gpt-5-mini",
+                "format": "OpenAI",
+                "version": "2025-08-07",
+                "skuName": "GlobalStandard",
+                "capacity": 100,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "text-embedding-3-large",
+                "model": "text-embedding-3-large",
+                "format": "OpenAI",
+                "version": "1",
+                "skuName": "GlobalStandard",
+                "capacity": 250,
+                "versionUpgradeOption": "NoAutoUpgrade",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              }
+            ],
+            "additionalTags": {"workload": "customer-foundation", "purpose": "customer-foundation-pilot"},
+            "keyVaultEnablePurgeProtection": true,
+            "keyVaultSoftDeleteRetentionInDays": 90,
+            "publicNetworkAccess": "Enabled",
+            "storageNetworkDefaultAction": "Allow",
+            "keyVaultNetworkDefaultAction": "Deny",
+            "runtimeAccessPrincipalId": "00000000-0000-0000-0000-000000000000",
+            "enableSameTenantRuntimeKeyVaultRoleAssignment": false
+          },
+          "runtimeParameters": {
+            "vnetAddressPrefix": "10.20.0.0/21",
+            "publicNetworkAccess": "Enabled",
+            "zoneRedundant": false,
+            "functionHostStorageNetworkDefaultAction": "Allow",
+            "functionPlanSkuName": "Y1",
+            "functionPlanSkuTier": "Dynamic",
+            "functionPlanCapacity": 0,
+            "functionWorkerRuntime": "python",
+            "functionWorkerRuntimeVersion": "3.11",
+            "functionConfiguration": {
+              "customerHostname": "pilot.lyhyt.nl",
+              "allowedGroupIds": [],
+              "deploymentTier": "standard"
+            },
+            "containerRegistryReference": {
+              "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replace-with-platform-resource-group/providers/Microsoft.ContainerRegistry/registries/replacewithacrname",
+              "loginServer": "replacewithacrname.azurecr.io"
+            },
+            "containerImage": "replacewithacrname.azurecr.io/pilot/your-image@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "keyVaultConfiguration": {
+              "enabled": false,
+              "customerKeyVaultResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replace-with-customer-resource-group/providers/Microsoft.KeyVault/vaults/replace-with-customer-vault",
+              "customerKeyVaultUri": "https://replace-with-customer-vault.vault.azure.net/",
+              "platformKeyVaultResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replace-with-platform-resource-group/providers/Microsoft.KeyVault/vaults/replace-with-platform-vault",
+              "platformKeyVaultUri": "https://replace-with-platform-vault.vault.azure.net/",
+              "requireKeyVault": false
+            },
+            "enablePlatformKeyVaultRoleAssignment": false,
+            "additionalTags": {"workload": "customer-runtime", "purpose": "foundation-pilot"}
+          }
+        }
+      }
+    }
+  ]
+}
