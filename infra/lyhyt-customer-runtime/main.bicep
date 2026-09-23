@@ -19,6 +19,33 @@ param vnetAddressPrefix string
 param publicNetworkAccess string
 param zoneRedundant bool
 
+@allowed([
+  'Allow'
+  'Deny'
+])
+param functionHostStorageNetworkDefaultAction string = 'Allow'
+
+param functionPlanSkuName string = 'Y1'
+param functionPlanSkuTier string = 'Dynamic'
+@minValue(0)
+param functionPlanCapacity int = 0
+param functionWorkerRuntime string = 'python'
+param functionWorkerRuntimeVersion string = '3.11'
+
+type functionConfigurationType = {
+  customerTenantId: string
+  customerHostname: string
+  allowedGroupIds: array
+  deploymentTier: string
+}
+
+param functionConfiguration functionConfigurationType = {
+  customerTenantId: ''
+  customerHostname: ''
+  allowedGroupIds: []
+  deploymentTier: 'standard'
+}
+
 type containerRegistryReferenceType = {
   // Canonical identity. The subscription, resource group, and registry name
   // are derived from this ID wherever Azure resources are scoped.
@@ -63,6 +90,21 @@ var logAnalyticsWorkspaceName = 'log-lyhyt-${customerCode}-${environment}-${regi
 var containerEnvironmentName = 'cae-lyhyt-${customerCode}-${environment}-${regionCode}'
 var identityName = 'id-lyhyt-${customerCode}-api-${environment}'
 var containerAppName = 'ca-lyhyt-${customerCode}-api-${environment}'
+var compactCustomerCode = replace(toLower(customerCode), '-', '')
+var functionPlanName = 'asp-lyhyt-${customerCode}-${environment}-${regionCode}'
+var functionHostStorageAccountName = 'st${take(compactCustomerCode, 8)}fn${environment}${regionCode}'
+var documentParserIdentityName = 'id-lyhyt-${customerCode}-document-parser-${environment}'
+var mailboxSyncIdentityName = 'id-lyhyt-${customerCode}-mailbox-sync-${environment}'
+var documentParserFunctionAppName = 'func-lyhyt-${customerCode}-document-parser-${environment}-${regionCode}-${uniqueString(subscription().id, customerCode, environment, regionCode, 'document-parser')}'
+var mailboxSyncFunctionAppName = 'func-lyhyt-${customerCode}-mailbox-sync-${environment}-${regionCode}-${uniqueString(subscription().id, customerCode, environment, regionCode, 'mailbox-sync')}'
+var functionHostStorageRoleDefinitionIds = [
+  // Storage Blob Data Owner
+  'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
+  // Storage Queue Data Contributor
+  '974c5e8b-45b9-4653-ba55-5f855dd0d3'
+  // Storage Table Data Contributor
+  '0a9a7e1f-bf94-4f9a-9ec5-1c16b5e4e9c9'
+]
 var containerRegistryResourceIdSegments = split(containerRegistryReference.resourceId, '/')
 var containerRegistrySubscriptionId = containerRegistryResourceIdSegments[2]
 var containerRegistryResourceGroupName = containerRegistryResourceIdSegments[4]
@@ -82,6 +124,20 @@ resource customerRuntimeResourceGroup 'Microsoft.Resources/resourceGroups@2025-0
   name: customerRuntimeResourceGroupName
   location: location
   tags: commonTags
+}
+
+module functionHostStorage './modules/function-host-storage.bicep' = {
+  name: 'deploy-function-host-storage-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    storageAccountName: functionHostStorageAccountName
+    location: location
+    tags: union(commonTags, {
+      component: 'customer-runtime-function-host-storage'
+    })
+    publicNetworkAccess: publicNetworkAccess
+    networkDefaultAction: functionHostStorageNetworkDefaultAction
+  }
 }
 
 module networking './modules/networking.bicep' = {
@@ -132,6 +188,59 @@ module identity './modules/identity.bicep' = {
   }
 }
 
+module documentParserIdentity './modules/identity.bicep' = {
+  name: 'deploy-document-parser-identity-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    identityName: documentParserIdentityName
+    location: location
+    tags: commonTags
+  }
+}
+
+module mailboxSyncIdentity './modules/identity.bicep' = {
+  name: 'deploy-mailbox-sync-identity-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    identityName: mailboxSyncIdentityName
+    location: location
+    tags: commonTags
+  }
+}
+
+module functionPlan './modules/function-plan.bicep' = {
+  name: 'deploy-function-plan-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    functionPlanName: functionPlanName
+    location: location
+    tags: commonTags
+    skuName: functionPlanSkuName
+    skuTier: functionPlanSkuTier
+    skuCapacity: functionPlanCapacity
+  }
+}
+
+module documentParserHostStorageRoleAssignment './modules/storage-data-role-assignment.bicep' = {
+  name: 'assign-document-parser-host-storage-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    storageAccountResourceId: functionHostStorage.outputs.storageAccountResourceId
+    roleDefinitionIds: functionHostStorageRoleDefinitionIds
+    principalId: documentParserIdentity.outputs.identityPrincipalId
+  }
+}
+
+module mailboxSyncHostStorageRoleAssignment './modules/storage-data-role-assignment.bicep' = {
+  name: 'assign-mailbox-sync-host-storage-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    storageAccountResourceId: functionHostStorage.outputs.storageAccountResourceId
+    roleDefinitionIds: functionHostStorageRoleDefinitionIds
+    principalId: mailboxSyncIdentity.outputs.identityPrincipalId
+  }
+}
+
 module acrPullRoleAssignment './modules/role-assignment.bicep' = {
   name: 'assign-acr-pull-${customerCode}-${environment}'
   scope: resourceGroup(containerRegistrySubscriptionId, containerRegistryResourceGroupName)
@@ -177,6 +286,66 @@ module containerApp './modules/container-app.bicep' = {
   }
 }
 
+module documentParserFunctionApp './modules/function-app.bicep' = {
+  name: 'deploy-document-parser-function-app-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  dependsOn: [
+    documentParserHostStorageRoleAssignment
+  ]
+  params: {
+    functionAppName: documentParserFunctionAppName
+    location: location
+    tags: commonTags
+    functionPlanResourceId: functionPlan.outputs.functionPlanResourceId
+    alwaysOn: functionPlanSkuName != 'Y1'
+    identityResourceId: documentParserIdentity.outputs.identityResourceId
+    identityClientId: documentParserIdentity.outputs.identityClientId
+    functionWorkload: 'document-parser'
+    functionWorkerRuntime: functionWorkerRuntime
+    functionWorkerRuntimeVersion: functionWorkerRuntimeVersion
+    customerCode: customerCode
+    environment: environment
+    customerTenantId: functionConfiguration.customerTenantId
+    customerHostname: functionConfiguration.customerHostname
+    allowedGroupIds: functionConfiguration.allowedGroupIds
+    deploymentTier: functionConfiguration.deploymentTier
+    providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
+    hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
+    hostStorageQueueServiceUri: functionHostStorage.outputs.queueServiceUri
+    hostStorageTableServiceUri: functionHostStorage.outputs.tableServiceUri
+  }
+}
+
+module mailboxSyncFunctionApp './modules/function-app.bicep' = {
+  name: 'deploy-mailbox-sync-function-app-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  dependsOn: [
+    mailboxSyncHostStorageRoleAssignment
+  ]
+  params: {
+    functionAppName: mailboxSyncFunctionAppName
+    location: location
+    tags: commonTags
+    functionPlanResourceId: functionPlan.outputs.functionPlanResourceId
+    alwaysOn: functionPlanSkuName != 'Y1'
+    identityResourceId: mailboxSyncIdentity.outputs.identityResourceId
+    identityClientId: mailboxSyncIdentity.outputs.identityClientId
+    functionWorkload: 'mailbox-sync'
+    functionWorkerRuntime: functionWorkerRuntime
+    functionWorkerRuntimeVersion: functionWorkerRuntimeVersion
+    customerCode: customerCode
+    environment: environment
+    customerTenantId: functionConfiguration.customerTenantId
+    customerHostname: functionConfiguration.customerHostname
+    allowedGroupIds: functionConfiguration.allowedGroupIds
+    deploymentTier: functionConfiguration.deploymentTier
+    providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
+    hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
+    hostStorageQueueServiceUri: functionHostStorage.outputs.queueServiceUri
+    hostStorageTableServiceUri: functionHostStorage.outputs.tableServiceUri
+  }
+}
+
 output customerRuntimeResourceGroupName string = customerRuntimeResourceGroup.name
 output logAnalyticsWorkspaceId string = monitoring.outputs.workspaceId
 output containerEnvironmentId string = containerEnvironment.outputs.containerEnvironmentId
@@ -189,3 +358,18 @@ output containerAppName string = containerApp.outputs.containerAppName
 output containerAppResourceId string = containerApp.outputs.containerAppResourceId
 output containerAppFqdn string = containerApp.outputs.containerAppFqdn
 output deployedImage string = containerApp.outputs.deployedImage
+output functionPlanResourceId string = functionPlan.outputs.functionPlanResourceId
+output functionHostStorageResourceId string = functionHostStorage.outputs.storageAccountResourceId
+output functionHostStorageAccountName string = functionHostStorage.outputs.storageAccountName
+output documentParserFunctionAppName string = documentParserFunctionApp.outputs.functionAppName
+output documentParserFunctionAppResourceId string = documentParserFunctionApp.outputs.functionAppResourceId
+output documentParserFunctionAppHostname string = documentParserFunctionApp.outputs.functionAppHostname
+output documentParserIdentityResourceId string = documentParserIdentity.outputs.identityResourceId
+output documentParserIdentityClientId string = documentParserIdentity.outputs.identityClientId
+output documentParserIdentityPrincipalId string = documentParserIdentity.outputs.identityPrincipalId
+output mailboxSyncFunctionAppName string = mailboxSyncFunctionApp.outputs.functionAppName
+output mailboxSyncFunctionAppResourceId string = mailboxSyncFunctionApp.outputs.functionAppResourceId
+output mailboxSyncFunctionAppHostname string = mailboxSyncFunctionApp.outputs.functionAppHostname
+output mailboxSyncIdentityResourceId string = mailboxSyncIdentity.outputs.identityResourceId
+output mailboxSyncIdentityClientId string = mailboxSyncIdentity.outputs.identityClientId
+output mailboxSyncIdentityPrincipalId string = mailboxSyncIdentity.outputs.identityPrincipalId
