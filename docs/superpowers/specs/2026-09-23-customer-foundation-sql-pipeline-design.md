@@ -46,7 +46,7 @@ Create `config/customers.json` as a non-secret catalog. Each customer record con
 }
 ```
 
-The resolver validates UUID-shaped identifiers and ensures the foundation administrator tenant matches the selected customer tenant. It does not accept credentials or secret values. The checked-in example parameter files remain templates; the workflow renders temporary parameter JSON from catalog values and never uses a local parameter file.
+The resolver validates UUID-shaped identifiers and ensures the foundation administrator tenant matches the selected customer tenant. It does not accept credentials or secret values. The checked-in example parameter files remain templates; the workflow renders a temporary `.bicepparam` file from catalog values, uses it for Bicep build-params and deployment, and deletes it after the job.
 
 ## Workflow architecture
 
@@ -56,13 +56,19 @@ Create `.github/workflows/customer-foundation-sql-runtime.yml` with these jobs:
 
 Loads the catalog and emits the resolved customer tenant, customer subscription, location, region code, release version, migration application client ID, migration principal object ID, and safe parameter payloads. It fails on branch refs and invalid catalog selections.
 
+### `lyhyt_runtime_bootstrap`
+
+Runs before the customer foundation jobs only when the resolved configuration enables customer Key Vault integration or same-tenant customer Key Vault RBAC. It logs in to the fixed LYHYT tenant and runtime subscription, renders a temporary `.bicepparam` with customer Key Vault integration disabled, `requireKeyVault` disabled, and customer-side RBAC disabled, and deploys the runtime once. It captures only the safe runtime UAMI outputs `identityPrincipalId` and `identityClientId` for the customer foundation handoff. The temporary `.bicepparam` is deleted after the job.
+
+When customer Key Vault integration is disabled, this job is skipped and the foundation parameters must keep `enableSameTenantRuntimeKeyVaultRoleAssignment` false. The bootstrap job never creates SQL, Search, AI, or customer Key Vault resources. It also never attempts cross-tenant customer RBAC; the existing same-tenant pilot role assignment remains explicitly opt-in.
+
 ### `customer_foundation_what_if`
 
-Logs in with `azure/login` using the customer tenant and the catalog migration application client ID through GitHub OIDC/WIF. It runs the required Bicep lint/build/build-params checks and a subscription-scoped foundation what-if. It does not provide SQL connection outputs to later jobs.
+Depends on the resolver and, when enabled, the LYHYT runtime bootstrap. It logs in with `azure/login` using the customer tenant and the catalog migration application client ID through GitHub OIDC/WIF. It renders a temporary `.bicepparam` containing the bootstrap UAMI principal ID when same-tenant customer Key Vault RBAC is enabled, runs the required Bicep lint/build/build-params checks against that file, and runs a subscription-scoped foundation what-if. The temporary `.bicepparam` is deleted after the job. It does not provide SQL connection outputs to later jobs.
 
 ### `customer_foundation_apply`
 
-Requires the protected `customer-foundation-apply` GitHub Environment. It logs in again to the customer tenant, deploys `infra/customer-foundation/main.bicep`, and reads `properties.outputs` from that apply deployment. It emits exactly these SQL handoff values as safe job outputs:
+Requires the protected `customer-foundation-apply` GitHub Environment. It logs in again to the customer tenant, renders the same temporary `.bicepparam` with the bootstrap UAMI principal ID when applicable, deploys `infra/customer-foundation/main.bicep`, reads `properties.outputs` from that apply deployment, and deletes the temporary `.bicepparam`. It emits exactly these SQL handoff values as safe job outputs:
 
 - `sqlServerFqdn`
 - `sqlDatabaseName`
@@ -96,7 +102,7 @@ Both paths use only the four SQL values emitted by `customer_foundation_apply` a
 
 ### `lyhyt_runtime`
 
-Runs only after the successful migration path. It logs in separately with the fixed LYHYT tenant/client/subscription configuration, renders the runtime parameter payload from catalog values plus safe customer foundation outputs, and deploys `infra/lyhyt-customer-runtime/main.bicep`. The runtime payload may contain customer tenant IDs, endpoints, and resource IDs, but no credentials or SQL passwords. The runtime template is verified to contain no SQL, Search, AI, or customer Key Vault resource creation.
+Runs only after the successful migration path. It logs in separately with the fixed LYHYT tenant/client/subscription configuration, renders a temporary `.bicepparam` from catalog values plus safe customer foundation outputs, and deploys `infra/lyhyt-customer-runtime/main.bicep`. When the bootstrap job ran, this final deployment enables the configured Key Vault integration only after customer foundation has created the vault and, for the same-tenant pilot, assigned the runtime UAMI its read-only role. The final temporary `.bicepparam` is deleted after the job. The runtime payload may contain customer tenant IDs, endpoints, and resource IDs, but no credentials or SQL passwords. The runtime template is verified to contain no SQL, Search, AI, or customer Key Vault resource creation.
 
 ## SQL migration system
 
