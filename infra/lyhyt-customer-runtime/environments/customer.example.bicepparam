@@ -14,20 +14,23 @@ param vnetAddressPrefix = '10.20.0.0/21'
 param publicNetworkAccess = 'Enabled'
 param zoneRedundant = false
 param functionHostStorageNetworkDefaultAction = 'Allow'
-// Y1/Dynamic is suitable for the TST pilot. Select an Elastic Premium SKU
-// explicitly for production private networking and stronger scale isolation.
-param functionPlanSkuName = 'Y1'
-param functionPlanSkuTier = 'Dynamic'
-param functionPlanCapacity = 0
-param functionWorkerRuntime = 'python'
-param functionWorkerRuntimeVersion = '3.11'
-param functionConfiguration = {
-  customerTenantId: '00000000-0000-0000-0000-000000000000'
-  customerHostname: 'pilot.lyhyt.nl'
-  allowedGroupIds: []
-  deploymentTier: 'standard'
+// Each Function App uses a dedicated Flex Consumption plan and its audited
+// Python runtime version. Package publication is handled by application CI/CD.
+param functionRuntimeConfiguration = {
+  documentParser: {
+    workerRuntime: 'python'
+    workerRuntimeVersion: '3.12'
+  }
+  mailboxSync: {
+    workerRuntime: 'python'
+    workerRuntimeVersion: '3.11'
+  }
+  sdb: {
+    workerRuntime: 'python'
+    workerRuntimeVersion: '3.12'
+  }
 }
-
+param enableDoclingResources = false
 // Replace this canonical reference with the complete resource ID and endpoint
 // from the shared platform deployment. The resource ID is the identity used
 // for existing-resource resolution and ACR RBAC scope.

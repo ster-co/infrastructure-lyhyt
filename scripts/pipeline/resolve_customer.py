@@ -35,12 +35,8 @@ REQUIRED_RUNTIME_PARAMETERS = frozenset({
     "publicNetworkAccess",
     "zoneRedundant",
     "functionHostStorageNetworkDefaultAction",
-    "functionPlanSkuName",
-    "functionPlanSkuTier",
-    "functionPlanCapacity",
-    "functionWorkerRuntime",
-    "functionWorkerRuntimeVersion",
-    "functionConfiguration",
+    "functionRuntimeConfiguration",
+    "enableDoclingResources",
     "containerRegistryReference",
     "containerImage",
     "keyVaultConfiguration",
@@ -54,6 +50,7 @@ REQUIRED_FOUNDATION_BOOLEAN_PARAMETERS = frozenset({
 })
 REQUIRED_RUNTIME_BOOLEAN_PARAMETERS = frozenset({
     "zoneRedundant",
+    "enableDoclingResources",
     "enablePlatformKeyVaultRoleAssignment",
 })
 REQUIRED_KEY_VAULT_BOOLEAN_PARAMETERS = frozenset({
@@ -99,6 +96,27 @@ def _require_boolean_parameters(
             raise ValueError(f"{name} missing required boolean key: {field}")
         if type(parameters[field]) is not bool:
             raise ValueError(f"{name}.{field} must be a JSON boolean")
+
+
+def _validate_function_runtime_configuration(configuration: Any) -> None:
+    if not isinstance(configuration, dict):
+        raise ValueError("runtimeParameters.functionRuntimeConfiguration must be an object")
+    required_workloads = ("documentParser", "mailboxSync", "sdb")
+    if set(configuration) != set(required_workloads):
+        raise ValueError(
+            "runtimeParameters.functionRuntimeConfiguration must contain exactly: "
+            + ", ".join(required_workloads)
+        )
+    for workload in required_workloads:
+        runtime = configuration[workload]
+        if not isinstance(runtime, dict):
+            raise ValueError(f"functionRuntimeConfiguration.{workload} must be an object")
+        if not isinstance(runtime.get("workerRuntime"), str) or not runtime["workerRuntime"]:
+            raise ValueError(f"functionRuntimeConfiguration.{workload}.workerRuntime must be a string")
+        if not isinstance(runtime.get("workerRuntimeVersion"), str) or not runtime["workerRuntimeVersion"]:
+            raise ValueError(
+                f"functionRuntimeConfiguration.{workload}.workerRuntimeVersion must be a string"
+            )
 
 
 @dataclass(frozen=True)
@@ -189,6 +207,7 @@ def resolve_customer(
         REQUIRED_KEY_VAULT_BOOLEAN_PARAMETERS,
         "runtimeParameters.keyVaultConfiguration",
     )
+    _validate_function_runtime_configuration(runtime.get("functionRuntimeConfiguration"))
     foundation = copy.deepcopy(foundation)
     runtime = copy.deepcopy(runtime)
     if foundation.get("sqlEntraAdministratorTenantId") != tenant_id:
@@ -210,10 +229,6 @@ def resolve_customer(
         "environment": environment,
         "location": location,
         "regionCode": region_code,
-        "functionConfiguration": {
-            **runtime.get("functionConfiguration", {}),
-            "customerTenantId": tenant_id,
-        },
     })
     return ResolvedDeployment(
         customer_id, environment, tenant_id, subscription_id, location, region_code,

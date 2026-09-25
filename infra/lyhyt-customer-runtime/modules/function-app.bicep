@@ -2,26 +2,19 @@ param functionAppName string
 param location string
 param tags object
 param functionPlanResourceId string
-param alwaysOn bool
 param identityResourceId string
 param identityClientId string
-param functionWorkload string
 param functionWorkerRuntime string
 param functionWorkerRuntimeVersion string
-param customerCode string
-param environment string
-param customerTenantId string
-param customerHostname string
-param allowedGroupIds array
-param deploymentTier string
+param deploymentStorageContainerUri string
+param applicationInsightsConnectionString string
 param keyVaultIntegrationEnabled bool = false
 param customerKeyVaultUri string = ''
-param providerKeyVaultUri string
+param providerKeyVaultUri string = ''
 param requireKeyVault bool = false
 param hostStorageBlobServiceUri string
 param hostStorageQueueServiceUri string
 param hostStorageTableServiceUri string
-param additionalAppSettings array = []
 
 var hostSettings = [
   {
@@ -35,10 +28,6 @@ var hostSettings = [
   {
     name: 'FUNCTIONS_WORKER_RUNTIME_VERSION'
     value: functionWorkerRuntimeVersion
-  }
-  {
-    name: 'WEBSITE_RUN_FROM_PACKAGE'
-    value: '1'
   }
   {
     name: 'AzureWebJobsStorage__credential'
@@ -62,7 +51,7 @@ var hostSettings = [
   }
 ]
 
-var applicationSettings = keyVaultIntegrationEnabled ? [
+var applicationSettings = [
   {
     name: 'AZURE_CLIENT_ID'
     value: identityClientId
@@ -77,44 +66,11 @@ var applicationSettings = keyVaultIntegrationEnabled ? [
   }
   {
     name: 'REQUIRE_KEY_VAULT'
-    value: requireKeyVault ? 'true' : 'false'
-  }
-] : [
-  {
-    name: 'AZURE_CLIENT_ID'
-    value: identityClientId
+    value: keyVaultIntegrationEnabled && requireKeyVault ? 'true' : 'false'
   }
   {
-    name: 'CUSTOMER_CODE'
-    value: customerCode
-  }
-  {
-    name: 'ENVIRONMENT'
-    value: environment
-  }
-  {
-    name: 'FUNCTION_WORKLOAD'
-    value: functionWorkload
-  }
-  {
-    name: 'CUSTOMER_TENANT_ID'
-    value: customerTenantId
-  }
-  {
-    name: 'CUSTOMER_HOSTNAME'
-    value: customerHostname
-  }
-  {
-    name: 'ALLOWED_GROUP_IDS'
-    value: string(allowedGroupIds)
-  }
-  {
-    name: 'DEPLOYMENT_TIER'
-    value: deploymentTier
-  }
-  {
-    name: 'PROVIDER_KEY_VAULT_URI'
-    value: providerKeyVaultUri
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: applicationInsightsConnectionString
   }
 ]
 
@@ -133,12 +89,26 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     serverFarmId: functionPlanResourceId
     httpsOnly: true
     clientAffinityEnabled: false
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'BlobContainer'
+          value: deploymentStorageContainerUri
+          authentication: {
+            type: 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: identityResourceId
+          }
+        }
+      }
+      runtime: {
+        name: functionWorkerRuntime
+        version: functionWorkerRuntimeVersion
+      }
+    }
     siteConfig: {
-      alwaysOn: alwaysOn
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
-      linuxFxVersion: '${functionWorkerRuntime == 'python' ? 'Python' : functionWorkerRuntime}|${functionWorkerRuntimeVersion}'
-      appSettings: concat(hostSettings, applicationSettings, additionalAppSettings)
+      appSettings: concat(hostSettings, applicationSettings)
     }
   }
 }

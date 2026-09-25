@@ -5,14 +5,14 @@ param skuName string
 param skuTier string
 param skuCapacity int
 
-// The hosting SKU is intentionally configurable. TST can use Y1/Dynamic;
-// production can select Elastic Premium when VNet integration and stronger
-// scale isolation are approved.
+// Flex Consumption is selected explicitly by each customer-runtime entry point.
+// One plan is dedicated to each Function App because the audited workloads have
+// different runtime versions and long-running execution needs.
 resource functionPlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: functionPlanName
   location: location
   tags: tags
-  kind: 'linux'
+  kind: 'functionapp,linux'
   sku: {
     name: skuName
     tier: skuTier

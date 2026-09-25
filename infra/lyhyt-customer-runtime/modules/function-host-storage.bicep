@@ -1,6 +1,8 @@
 param storageAccountName string
 param location string
 param tags object
+param blobContainerNames array = []
+param queueNames array = []
 
 @allowed([
   'Enabled'
@@ -54,6 +56,29 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
     supportsHttpsTrafficOnly: true
   }
 }
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2026-04-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource blobContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2026-04-01' = [for containerName in blobContainerNames: {
+  parent: blobService
+  name: containerName
+  properties: {
+    publicAccess: 'None'
+  }
+}]
+
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2026-04-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource queues 'Microsoft.Storage/storageAccounts/queueServices/queues@2026-04-01' = [for queueName in queueNames: {
+  parent: queueService
+  name: queueName
+}]
 
 output storageAccountResourceId string = storageAccount.id
 output storageAccountName string = storageAccount.name

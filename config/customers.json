@@ -76,16 +76,12 @@
             "publicNetworkAccess": "Enabled",
             "zoneRedundant": false,
             "functionHostStorageNetworkDefaultAction": "Allow",
-            "functionPlanSkuName": "Y1",
-            "functionPlanSkuTier": "Dynamic",
-            "functionPlanCapacity": 0,
-            "functionWorkerRuntime": "python",
-            "functionWorkerRuntimeVersion": "3.11",
-            "functionConfiguration": {
-              "customerHostname": "pilot.lyhyt.nl",
-              "allowedGroupIds": [],
-              "deploymentTier": "standard"
+            "functionRuntimeConfiguration": {
+              "documentParser": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"},
+              "mailboxSync": {"workerRuntime": "python", "workerRuntimeVersion": "3.11"},
+              "sdb": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"}
             },
+            "enableDoclingResources": false,
             "containerRegistryReference": {
               "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replace-with-platform-resource-group/providers/Microsoft.ContainerRegistry/registries/replacewithacrname",
               "loginServer": "replacewithacrname.azurecr.io"

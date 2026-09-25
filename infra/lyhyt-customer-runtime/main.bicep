@@ -25,26 +25,23 @@ param zoneRedundant bool
 ])
 param functionHostStorageNetworkDefaultAction string = 'Allow'
 
-param functionPlanSkuName string = 'Y1'
-param functionPlanSkuTier string = 'Dynamic'
-@minValue(0)
-param functionPlanCapacity int = 0
-param functionWorkerRuntime string = 'python'
-param functionWorkerRuntimeVersion string = '3.11'
-
-type functionConfigurationType = {
-  customerTenantId: string
-  customerHostname: string
-  allowedGroupIds: array
-  deploymentTier: string
+type functionRuntimeConfigurationType = {
+  documentParser: {
+    workerRuntime: string
+    workerRuntimeVersion: string
+  }
+  mailboxSync: {
+    workerRuntime: string
+    workerRuntimeVersion: string
+  }
+  sdb: {
+    workerRuntime: string
+    workerRuntimeVersion: string
+  }
 }
 
-param functionConfiguration functionConfigurationType = {
-  customerTenantId: ''
-  customerHostname: ''
-  allowedGroupIds: []
-  deploymentTier: 'standard'
-}
+param functionRuntimeConfiguration functionRuntimeConfigurationType
+param enableDoclingResources bool = false
 
 type containerRegistryReferenceType = {
   // Canonical identity. The subscription, resource group, and registry name
@@ -91,12 +88,40 @@ var containerEnvironmentName = 'cae-lyhyt-${customerCode}-${environment}-${regio
 var identityName = 'id-lyhyt-${customerCode}-api-${environment}'
 var containerAppName = 'ca-lyhyt-${customerCode}-api-${environment}'
 var compactCustomerCode = replace(toLower(customerCode), '-', '')
-var functionPlanName = 'asp-lyhyt-${customerCode}-${environment}-${regionCode}'
+var applicationInsightsName = 'appi-lyhyt-${customerCode}-${environment}-${regionCode}'
+var documentParserFunctionPlanName = 'asp-lyhyt-${customerCode}-document-parser-${environment}-${regionCode}'
+var mailboxSyncFunctionPlanName = 'asp-lyhyt-${customerCode}-mailbox-sync-${environment}-${regionCode}'
+var sdbFunctionPlanName = 'asp-lyhyt-${customerCode}-sdb-${environment}-${regionCode}'
 var functionHostStorageAccountName = 'st${take(compactCustomerCode, 8)}fn${environment}${regionCode}'
 var documentParserIdentityName = 'id-lyhyt-${customerCode}-document-parser-${environment}'
 var mailboxSyncIdentityName = 'id-lyhyt-${customerCode}-mailbox-sync-${environment}'
+var sdbIdentityName = 'id-lyhyt-${customerCode}-sdb-${environment}'
 var documentParserFunctionAppName = 'func-lyhyt-${customerCode}-document-parser-${environment}-${regionCode}-${uniqueString(subscription().id, customerCode, environment, regionCode, 'document-parser')}'
 var mailboxSyncFunctionAppName = 'func-lyhyt-${customerCode}-mailbox-sync-${environment}-${regionCode}-${uniqueString(subscription().id, customerCode, environment, regionCode, 'mailbox-sync')}'
+var sdbFunctionAppName = 'func-lyhyt-${customerCode}-sdb-${environment}-${regionCode}-${uniqueString(subscription().id, customerCode, environment, regionCode, 'sdb')}'
+var documentParserDeploymentContainerName = 'deployment-document-parser'
+var mailboxSyncDeploymentContainerName = 'deployment-mailbox-sync'
+var sdbDeploymentContainerName = 'deployment-sdb'
+var functionBlobContainerNames = concat([
+  documentParserDeploymentContainerName
+  mailboxSyncDeploymentContainerName
+  sdbDeploymentContainerName
+  'di-cache'
+  'sync-reports'
+  'background-job-status'
+], enableDoclingResources ? [
+  'docling-jobs'
+] : [])
+var functionQueueNames = concat([
+  'sync-jobs'
+  'sync-jobs-poison'
+  'extraction-jobs'
+  'extraction-jobs-poison'
+  'offerte-flow-jobs'
+  'offerte-flow-jobs-poison'
+], enableDoclingResources ? [
+  'docling-jobs'
+] : [])
 var functionHostStorageRoleDefinitionIds = [
   // Storage Blob Data Owner
   'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
@@ -120,6 +145,7 @@ var acrPullRoleAssignmentName = guid(containerRegistryReference.resourceId, iden
 var platformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, identityName, keyVaultSecretsUserRoleDefinitionId)
 var documentParserPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, documentParserIdentityName, keyVaultSecretsUserRoleDefinitionId)
 var mailboxSyncPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, mailboxSyncIdentityName, keyVaultSecretsUserRoleDefinitionId)
+var sdbPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, sdbIdentityName, keyVaultSecretsUserRoleDefinitionId)
 var platformKeyVaultRoleAssignmentEnabled = enablePlatformKeyVaultRoleAssignment && keyVaultConfiguration.enabled
 
 resource customerRuntimeResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
@@ -139,6 +165,8 @@ module functionHostStorage './modules/function-host-storage.bicep' = {
     })
     publicNetworkAccess: publicNetworkAccess
     networkDefaultAction: functionHostStorageNetworkDefaultAction
+    blobContainerNames: functionBlobContainerNames
+    queueNames: functionQueueNames
   }
 }
 
@@ -162,6 +190,17 @@ module monitoring './modules/monitoring.bicep' = {
     workspaceName: logAnalyticsWorkspaceName
     location: location
     tags: commonTags
+  }
+}
+
+module applicationInsights './modules/application-insights.bicep' = {
+  name: 'deploy-application-insights-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    componentName: applicationInsightsName
+    location: location
+    tags: commonTags
+    workspaceResourceId: monitoring.outputs.workspaceId
   }
 }
 
@@ -210,16 +249,52 @@ module mailboxSyncIdentity './modules/identity.bicep' = {
   }
 }
 
-module functionPlan './modules/function-plan.bicep' = {
-  name: 'deploy-function-plan-${customerCode}-${environment}'
+module sdbIdentity './modules/identity.bicep' = {
+  name: 'deploy-sdb-identity-${customerCode}-${environment}'
   scope: customerRuntimeResourceGroup
   params: {
-    functionPlanName: functionPlanName
+    identityName: sdbIdentityName
     location: location
     tags: commonTags
-    skuName: functionPlanSkuName
-    skuTier: functionPlanSkuTier
-    skuCapacity: functionPlanCapacity
+  }
+}
+
+module documentParserFunctionPlan './modules/function-plan.bicep' = {
+  name: 'deploy-document-parser-function-plan-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    functionPlanName: documentParserFunctionPlanName
+    location: location
+    tags: commonTags
+    skuName: 'FC1'
+    skuTier: 'FlexConsumption'
+    skuCapacity: 0
+  }
+}
+
+module mailboxSyncFunctionPlan './modules/function-plan.bicep' = {
+  name: 'deploy-mailbox-sync-function-plan-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    functionPlanName: mailboxSyncFunctionPlanName
+    location: location
+    tags: commonTags
+    skuName: 'FC1'
+    skuTier: 'FlexConsumption'
+    skuCapacity: 0
+  }
+}
+
+module sdbFunctionPlan './modules/function-plan.bicep' = {
+  name: 'deploy-sdb-function-plan-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    functionPlanName: sdbFunctionPlanName
+    location: location
+    tags: commonTags
+    skuName: 'FC1'
+    skuTier: 'FlexConsumption'
+    skuCapacity: 0
   }
 }
 
@@ -240,6 +315,16 @@ module mailboxSyncHostStorageRoleAssignment './modules/storage-data-role-assignm
     storageAccountResourceId: functionHostStorage.outputs.storageAccountResourceId
     roleDefinitionIds: functionHostStorageRoleDefinitionIds
     principalId: mailboxSyncIdentity.outputs.identityPrincipalId
+  }
+}
+
+module sdbHostStorageRoleAssignment './modules/storage-data-role-assignment.bicep' = {
+  name: 'assign-sdb-host-storage-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  params: {
+    storageAccountResourceId: functionHostStorage.outputs.storageAccountResourceId
+    roleDefinitionIds: functionHostStorageRoleDefinitionIds
+    principalId: sdbIdentity.outputs.identityPrincipalId
   }
 }
 
@@ -283,6 +368,16 @@ module mailboxSyncPlatformKeyVaultRoleAssignment './modules/key-vault-role-assig
   }
 }
 
+module sdbPlatformKeyVaultRoleAssignment './modules/key-vault-role-assignment.bicep' = if (platformKeyVaultRoleAssignmentEnabled) {
+  name: 'assign-sdb-platform-key-vault-secrets-user-${customerCode}-${environment}'
+  scope: resourceGroup(platformKeyVaultSubscriptionId, platformKeyVaultResourceGroupName)
+  params: {
+    keyVaultResourceId: keyVaultConfiguration.platformKeyVaultResourceId
+    roleAssignmentName: sdbPlatformKeyVaultRoleAssignmentName
+    principalId: sdbIdentity.outputs.identityPrincipalId
+  }
+}
+
 module containerApp './modules/container-app.bicep' = {
   name: 'deploy-container-app-${customerCode}-${environment}'
   scope: customerRuntimeResourceGroup
@@ -291,6 +386,7 @@ module containerApp './modules/container-app.bicep' = {
     platformKeyVaultRoleAssignment
     documentParserPlatformKeyVaultRoleAssignment
     mailboxSyncPlatformKeyVaultRoleAssignment
+    sdbPlatformKeyVaultRoleAssignment
   ]
   params: {
     containerAppName: containerAppName
@@ -321,19 +417,13 @@ module documentParserFunctionApp './modules/function-app.bicep' = {
     functionAppName: documentParserFunctionAppName
     location: location
     tags: commonTags
-    functionPlanResourceId: functionPlan.outputs.functionPlanResourceId
-    alwaysOn: functionPlanSkuName != 'Y1'
+    functionPlanResourceId: documentParserFunctionPlan.outputs.functionPlanResourceId
     identityResourceId: documentParserIdentity.outputs.identityResourceId
     identityClientId: documentParserIdentity.outputs.identityClientId
-    functionWorkload: 'document-parser'
-    functionWorkerRuntime: functionWorkerRuntime
-    functionWorkerRuntimeVersion: functionWorkerRuntimeVersion
-    customerCode: customerCode
-    environment: environment
-    customerTenantId: functionConfiguration.customerTenantId
-    customerHostname: functionConfiguration.customerHostname
-    allowedGroupIds: functionConfiguration.allowedGroupIds
-    deploymentTier: functionConfiguration.deploymentTier
+    functionWorkerRuntime: functionRuntimeConfiguration.documentParser.workerRuntime
+    functionWorkerRuntimeVersion: functionRuntimeConfiguration.documentParser.workerRuntimeVersion
+    deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${documentParserDeploymentContainerName}'
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
     customerKeyVaultUri: keyVaultConfiguration.customerKeyVaultUri
     providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
@@ -355,19 +445,41 @@ module mailboxSyncFunctionApp './modules/function-app.bicep' = {
     functionAppName: mailboxSyncFunctionAppName
     location: location
     tags: commonTags
-    functionPlanResourceId: functionPlan.outputs.functionPlanResourceId
-    alwaysOn: functionPlanSkuName != 'Y1'
+    functionPlanResourceId: mailboxSyncFunctionPlan.outputs.functionPlanResourceId
     identityResourceId: mailboxSyncIdentity.outputs.identityResourceId
     identityClientId: mailboxSyncIdentity.outputs.identityClientId
-    functionWorkload: 'mailbox-sync'
-    functionWorkerRuntime: functionWorkerRuntime
-    functionWorkerRuntimeVersion: functionWorkerRuntimeVersion
-    customerCode: customerCode
-    environment: environment
-    customerTenantId: functionConfiguration.customerTenantId
-    customerHostname: functionConfiguration.customerHostname
-    allowedGroupIds: functionConfiguration.allowedGroupIds
-    deploymentTier: functionConfiguration.deploymentTier
+    functionWorkerRuntime: functionRuntimeConfiguration.mailboxSync.workerRuntime
+    functionWorkerRuntimeVersion: functionRuntimeConfiguration.mailboxSync.workerRuntimeVersion
+    deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${mailboxSyncDeploymentContainerName}'
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
+    keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
+    customerKeyVaultUri: keyVaultConfiguration.customerKeyVaultUri
+    providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
+    requireKeyVault: keyVaultConfiguration.requireKeyVault
+    hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
+    hostStorageQueueServiceUri: functionHostStorage.outputs.queueServiceUri
+    hostStorageTableServiceUri: functionHostStorage.outputs.tableServiceUri
+  }
+}
+
+module sdbFunctionApp './modules/function-app.bicep' = {
+  name: 'deploy-sdb-function-app-${customerCode}-${environment}'
+  scope: customerRuntimeResourceGroup
+  dependsOn: [
+    sdbHostStorageRoleAssignment
+    sdbPlatformKeyVaultRoleAssignment
+  ]
+  params: {
+    functionAppName: sdbFunctionAppName
+    location: location
+    tags: commonTags
+    functionPlanResourceId: sdbFunctionPlan.outputs.functionPlanResourceId
+    identityResourceId: sdbIdentity.outputs.identityResourceId
+    identityClientId: sdbIdentity.outputs.identityClientId
+    functionWorkerRuntime: functionRuntimeConfiguration.sdb.workerRuntime
+    functionWorkerRuntimeVersion: functionRuntimeConfiguration.sdb.workerRuntimeVersion
+    deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${sdbDeploymentContainerName}'
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
     customerKeyVaultUri: keyVaultConfiguration.customerKeyVaultUri
     providerKeyVaultUri: keyVaultConfiguration.platformKeyVaultUri
@@ -390,9 +502,12 @@ output containerAppName string = containerApp.outputs.containerAppName
 output containerAppResourceId string = containerApp.outputs.containerAppResourceId
 output containerAppFqdn string = containerApp.outputs.containerAppFqdn
 output deployedImage string = containerApp.outputs.deployedImage
-output functionPlanResourceId string = functionPlan.outputs.functionPlanResourceId
+output applicationInsightsResourceId string = applicationInsights.outputs.resourceId
 output functionHostStorageResourceId string = functionHostStorage.outputs.storageAccountResourceId
 output functionHostStorageAccountName string = functionHostStorage.outputs.storageAccountName
+output documentParserFunctionPlanResourceId string = documentParserFunctionPlan.outputs.functionPlanResourceId
+output mailboxSyncFunctionPlanResourceId string = mailboxSyncFunctionPlan.outputs.functionPlanResourceId
+output sdbFunctionPlanResourceId string = sdbFunctionPlan.outputs.functionPlanResourceId
 output documentParserFunctionAppName string = documentParserFunctionApp.outputs.functionAppName
 output documentParserFunctionAppResourceId string = documentParserFunctionApp.outputs.functionAppResourceId
 output documentParserFunctionAppHostname string = documentParserFunctionApp.outputs.functionAppHostname
@@ -405,3 +520,9 @@ output mailboxSyncFunctionAppHostname string = mailboxSyncFunctionApp.outputs.fu
 output mailboxSyncIdentityResourceId string = mailboxSyncIdentity.outputs.identityResourceId
 output mailboxSyncIdentityClientId string = mailboxSyncIdentity.outputs.identityClientId
 output mailboxSyncIdentityPrincipalId string = mailboxSyncIdentity.outputs.identityPrincipalId
+output sdbFunctionAppName string = sdbFunctionApp.outputs.functionAppName
+output sdbFunctionAppResourceId string = sdbFunctionApp.outputs.functionAppResourceId
+output sdbFunctionAppHostname string = sdbFunctionApp.outputs.functionAppHostname
+output sdbIdentityResourceId string = sdbIdentity.outputs.identityResourceId
+output sdbIdentityClientId string = sdbIdentity.outputs.identityClientId
+output sdbIdentityPrincipalId string = sdbIdentity.outputs.identityPrincipalId

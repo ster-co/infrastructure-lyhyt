@@ -6,7 +6,7 @@ Azure Bicep templates for the LYHYT shared platform, customer foundation, and cu
 
 - `infra/lyhyt-platform/` provisions the shared platform resource group, Azure Container Registry, and optional shared platform Key Vault.
 - `infra/customer-foundation/` provisions customer-scoped Storage, Key Vault, Azure SQL, AI Services, Document Intelligence, and AI model deployments.
-- `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Container Apps Environment, managed identity, ACR pull access, and the customer Container App.
+- `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Application Insights, Container Apps Environment, the customer Container App, three Flex Consumption Function Apps, one user-assigned identity and plan per Function App, shared identity-based host storage, dedicated Flex deployment containers, and workload queues/containers.
 - `reference/exports/` contains exported Azure reference templates for comparison only and is excluded from Git.
 
 Each entry point is subscription-scoped and has an example parameter file under its `environments/` directory.
@@ -29,7 +29,7 @@ The address space between the two subnets is intentionally reserved for future r
 
 The pilot uses direct same-tenant Managed Identity RBAC for LYHYT-owned resources such as ACR. Workload identity federation for cross-tenant access is deliberately not implemented yet.
 
-The runtime uses one user-assigned managed identity per customer. The dual-Key-Vault configuration is application-level: Bicep passes only the UAMI client ID, customer/platform vault resource IDs, vault URIs, and feature flags. The application reads secrets itself through `DefaultAzureCredential` and `SecretClient`; Container App `keyVaultUrl` references are intentionally not configured. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the exact contract, secret-name allowlists, RBAC boundaries, and deployment handoff.
+The runtime uses separate user-assigned managed identities for the three Function Apps and the Container App. Function Apps use dedicated Flex deployment containers authenticated by their own identities, while host storage remains a shared account with account-level RBAC; separate identities therefore do not isolate application queues or containers. The dual-Key-Vault configuration is application-level: Bicep passes only identity client IDs, vault URIs, host-storage settings, monitoring settings, and feature flags. Applications read secrets themselves through their approved Key Vault bootstrap. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the exact contract, secret-name mappings, storage boundary, RBAC rules, and deployment handoff.
 
 ## Prerequisites
 
