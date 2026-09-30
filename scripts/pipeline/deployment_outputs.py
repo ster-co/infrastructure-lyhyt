@@ -1,4 +1,4 @@
-"""Parse and validate outputs from the customer-foundation apply deployment."""
+"""Parse and validate outputs from the platform and customer deployments."""
 
 from __future__ import annotations
 
@@ -16,6 +16,19 @@ _OUTPUT_NAMES = (
     "customerKeyVaultUri",
     "searchEndpoint",
     "aiEndpoint",
+)
+_PLATFORM_OUTPUT_NAMES = (
+    "containerRegistryName",
+    "containerRegistryLoginServer",
+    "containerRegistryId",
+    "platformKeyVaultResourceId",
+    "platformKeyVaultName",
+    "platformKeyVaultUri",
+)
+_REQUIRED_PLATFORM_OUTPUT_NAMES = (
+    "containerRegistryName",
+    "containerRegistryLoginServer",
+    "containerRegistryId",
 )
 _RESOURCE_ID = re.compile(
     r"^/subscriptions/([^/]+)/resourceGroups/[^/]+/providers/([^/]+)/.+$",
@@ -68,6 +81,55 @@ def extract_foundation_outputs(raw_outputs: dict[str, object]) -> FoundationOutp
         customer_key_vault_uri=values["customerKeyVaultUri"],
         search_endpoint=values["searchEndpoint"],
         ai_endpoint=values["aiEndpoint"],
+    )
+
+
+@dataclass(frozen=True)
+class PlatformOutputs:
+    container_registry_name: str
+    container_registry_login_server: str
+    container_registry_id: str
+    platform_key_vault_resource_id: str
+    platform_key_vault_name: str
+    platform_key_vault_uri: str
+
+    def to_safe_dict(self) -> dict[str, str]:
+        return {
+            "containerRegistryName": self.container_registry_name,
+            "containerRegistryLoginServer": self.container_registry_login_server,
+            "containerRegistryId": self.container_registry_id,
+            "platformKeyVaultResourceId": self.platform_key_vault_resource_id,
+            "platformKeyVaultName": self.platform_key_vault_name,
+            "platformKeyVaultUri": self.platform_key_vault_uri,
+        }
+
+
+def extract_platform_outputs(raw_outputs: dict[str, object]) -> PlatformOutputs:
+    if not isinstance(raw_outputs, dict):
+        raise ValueError("deployment outputs must be an object")
+    values: dict[str, str] = {}
+    for name in _REQUIRED_PLATFORM_OUTPUT_NAMES:
+        output = raw_outputs.get(name)
+        if not isinstance(output, dict) or not isinstance(output.get("value"), str):
+            raise ValueError(f"platform output {name} must contain a string value")
+        if not output["value"]:
+            raise ValueError(f"platform output {name} must not be empty")
+        values[name] = output["value"]
+    for name in set(_PLATFORM_OUTPUT_NAMES) - set(_REQUIRED_PLATFORM_OUTPUT_NAMES):
+        output = raw_outputs.get(name)
+        if output is None:
+            values[name] = ""
+        elif not isinstance(output, dict) or not isinstance(output.get("value"), str):
+            raise ValueError(f"platform output {name} must contain a string value")
+        else:
+            values[name] = output["value"]
+    return PlatformOutputs(
+        container_registry_name=values["containerRegistryName"],
+        container_registry_login_server=values["containerRegistryLoginServer"],
+        container_registry_id=values["containerRegistryId"],
+        platform_key_vault_resource_id=values["platformKeyVaultResourceId"],
+        platform_key_vault_name=values["platformKeyVaultName"],
+        platform_key_vault_uri=values["platformKeyVaultUri"],
     )
 
 

@@ -22,6 +22,10 @@ _OUTPUT_TO_SECRET = {
     "gpt5MiniDeploymentName": "azure-openai-deployment-gpt5-mini",
     "textEmbedding3LargeDeploymentName": "azure-openai-deployment-text-embedding-3-large",
 }
+_DEFAULT_CUSTOMER_SECRETS = {
+    "brave-search-api-key": "not-configured",
+}
+_ALLOWED_CUSTOMER_SECRETS = set(_OUTPUT_TO_SECRET.values()) | set(_DEFAULT_CUSTOMER_SECRETS)
 _KEY_VAULT_NAME = re.compile(r"^[a-z0-9-]{3,24}$")
 
 
@@ -153,10 +157,12 @@ def extract_customer_configuration(raw_outputs: dict[str, object]) -> dict[str, 
 
     if not isinstance(raw_outputs, dict):
         raise ValueError("deployment outputs must be an object")
-    return {
+    values = {
         secret_name: _output_value(raw_outputs, output_name)
         for output_name, secret_name in _OUTPUT_TO_SECRET.items()
     }
+    values.update(_DEFAULT_CUSTOMER_SECRETS)
+    return values
 
 
 def publish_customer_configuration(
@@ -174,7 +180,7 @@ def publish_customer_configuration(
         for name, value in values.items()
     ):
         raise ValueError("customer configuration must contain non-empty string values")
-    if set(values) - set(_OUTPUT_TO_SECRET.values()):
+    if set(values) - _ALLOWED_CUSTOMER_SECRETS:
         raise ValueError("customer configuration contains an unallowlisted secret name")
 
     existing_names = set(publisher.list_names())

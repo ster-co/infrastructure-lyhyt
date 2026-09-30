@@ -24,6 +24,7 @@ env:
   CATALOG_PATH: config/customers.json
   FOUNDATION_TEMPLATE: infra/customer-foundation/main.bicep
   RUNTIME_TEMPLATE: infra/lyhyt-customer-runtime/main.bicep
+  PLATFORM_TEMPLATE: infra/lyhyt-platform/main.bicep
   FOUNDATION_MANIFEST: docs/database/migrations/manifest.json
 
 jobs:
@@ -104,9 +105,79 @@ jobs:
                   output.write(f"{name}={value}\n")
           PY
 
-  lyhyt_runtime_bootstrap:
+  lyhyt_platform:
     needs: resolve
-    if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'true' }}
+    if: ${{ needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      container_registry_resource_id: ${{ steps.deploy.outputs.container_registry_resource_id }}
+      container_registry_login_server: ${{ steps.deploy.outputs.container_registry_login_server }}
+      platform_key_vault_resource_id: ${{ steps.deploy.outputs.platform_key_vault_resource_id }}
+      platform_key_vault_uri: ${{ steps.deploy.outputs.platform_key_vault_uri }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to LYHYT tenant for shared platform outputs
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+
+      - name: Read shared platform deployment outputs
+        id: deploy
+        env:
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          PLATFORM_OUTPUTS_FILE: ${{ runner.temp }}/lyhyt-platform-outputs.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          az bicep lint --file "$PLATFORM_TEMPLATE"
+          az bicep build --file "$PLATFORM_TEMPLATE" --stdout > /dev/null
+          az deployment sub show --name "lyhyt-platform-${DEPLOYMENT_ENVIRONMENT}" \
+            --query properties.outputs \
+            --output json > "$PLATFORM_OUTPUTS_FILE"
+          python3 - "$PLATFORM_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$LYHYT_PLATFORM_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_platform_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              outputs = extract_platform_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              )
+              safe = outputs.to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["containerRegistryId"], sys.argv[3], "Microsoft.ContainerRegistry"
+              )
+              if safe["platformKeyVaultResourceId"]:
+                  validate_resource_id_subscription(
+                      safe["platformKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
+                  )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("shared platform returned invalid safe outputs") from None
+
+          output_names = {
+              "containerRegistryId": "container_registry_resource_id",
+              "containerRegistryLoginServer": "container_registry_login_server",
+              "platformKeyVaultResourceId": "platform_key_vault_resource_id",
+              "platformKeyVaultUri": "platform_key_vault_uri",
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for source_name, output_name in output_names.items():
+                  output.write(f"{output_name}={safe[source_name]}\n")
+          PY
+
+  lyhyt_runtime_bootstrap:
+    needs: [resolve, lyhyt_platform]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       identity_principal_id: ${{ steps.bootstrap.outputs.identity_principal_id }}
@@ -131,6 +202,10 @@ jobs:
           INPUT_REF_NAME: ${{ github.ref_name }}
           BOOTSTRAP_OUTPUT_FILE: ${{ runner.temp }}/runtime-bootstrap-outputs.json
           LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
+          PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}
+          CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
+          CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
         run: |
@@ -154,16 +229,14 @@ jobs:
 
           try:
               resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-              runtime = resolved["runtimeParameters"]
               validate_resource_id_subscription(
-                  runtime["containerRegistryReference"]["resourceId"],
+                  os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
                   os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
                   "Microsoft.ContainerRegistry",
               )
-              key_vault = runtime["keyVaultConfiguration"]
-              if key_vault["enabled"] or runtime["enablePlatformKeyVaultRoleAssignment"]:
+              if os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]:
                   validate_resource_id_subscription(
-                      key_vault["platformKeyVaultResourceId"],
+                      os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"],
                       os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
                       "Microsoft.KeyVault",
                   )
@@ -172,6 +245,7 @@ jobs:
           PY
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -179,7 +253,15 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["runtimeParameters"])
+          parameters["containerRegistryReference"] = {
+              "resourceId": os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
+              "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
+          }
           key_vault = dict(parameters["keyVaultConfiguration"])
+          key_vault["customerKeyVaultResourceId"] = ""
+          key_vault["customerKeyVaultUri"] = ""
+          key_vault["platformKeyVaultResourceId"] = os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]
+          key_vault["platformKeyVaultUri"] = os.environ["PLATFORM_KEY_VAULT_URI"]
           key_vault["enabled"] = False
           key_vault["requireKeyVault"] = False
           parameters["keyVaultConfiguration"] = key_vault
@@ -213,8 +295,8 @@ jobs:
           PY
 
   customer_foundation_what_if:
-    needs: [resolve, lyhyt_runtime_bootstrap]
-    if: ${{ always() && needs.resolve.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -279,8 +361,8 @@ jobs:
             --template-file "$FOUNDATION_TEMPLATE"
 
   customer_foundation_apply:
-    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_what_if]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.customer_foundation_what_if.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_what_if]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_what_if.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
     runs-on: ubuntu-latest
     environment:
       name: customer-foundation-apply
@@ -656,8 +738,8 @@ jobs:
             --output json
 
   lyhyt_runtime:
-    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_apply, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_apply, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -680,6 +762,10 @@ jobs:
           FOUNDATION_KEY_VAULT_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultResourceId }}
           FOUNDATION_KEY_VAULT_URI: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultUri }}
           LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
+          PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}
+          CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
+          CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
         run: |
@@ -703,18 +789,14 @@ jobs:
 
           try:
               resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-              runtime = resolved["runtimeParameters"]
               validate_resource_id_subscription(
-                  runtime["containerRegistryReference"]["resourceId"],
+                  os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
                   os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
                   "Microsoft.ContainerRegistry",
               )
-              key_vault = runtime["keyVaultConfiguration"]
-              final_key_vault_enabled = os.environ["RUNTIME_KEY_VAULT_ENABLED"] == "true"
-              final_platform_role_assignment = final_key_vault_enabled and runtime["enablePlatformKeyVaultRoleAssignment"]
-              if final_key_vault_enabled or final_platform_role_assignment:
+              if os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]:
                   validate_resource_id_subscription(
-                      key_vault["platformKeyVaultResourceId"],
+                      os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"],
                       os.environ["LYHYT_PLATFORM_SUBSCRIPTION_ID"],
                       "Microsoft.KeyVault",
                   )
@@ -731,9 +813,15 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["runtimeParameters"])
+          parameters["containerRegistryReference"] = {
+              "resourceId": os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
+              "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
+          }
           key_vault = dict(parameters["keyVaultConfiguration"])
           key_vault["customerKeyVaultResourceId"] = os.environ["FOUNDATION_KEY_VAULT_RESOURCE_ID"]
           key_vault["customerKeyVaultUri"] = os.environ["FOUNDATION_KEY_VAULT_URI"]
+          key_vault["platformKeyVaultResourceId"] = os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]
+          key_vault["platformKeyVaultUri"] = os.environ["PLATFORM_KEY_VAULT_URI"]
           if os.environ["RUNTIME_KEY_VAULT_ENABLED"] == "true":
               key_vault["enabled"] = True
           else:

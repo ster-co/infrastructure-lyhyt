@@ -61,12 +61,13 @@ git diff --check
 
 ## Deployment order
 
-Deploy the shared platform first, then run the runtime once with Key Vault integration disabled to create the per-customer UAMI. Use its safe identity outputs for the customer foundation access handoff, resolve both vault IDs/URIs, and redeploy the runtime with integration and applicable RBAC enabled. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Populate Key Vault secrets later through a secured workflow; keep `REQUIRE_KEY_VAULT=false` until application validation and restart the Container App after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
+Deploy the shared platform first, then run the runtime once with Key Vault integration disabled to create the per-customer UAMI. Use its safe identity outputs for the customer foundation access handoff, resolve the customer vault ID/URI, and redeploy the runtime with integration and applicable RBAC enabled. The optional platform vault may remain disabled. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Populate Key Vault secrets later through a secured workflow; keep `REQUIRE_KEY_VAULT=false` until application validation and restart the Container App after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
 
 ### 1. Shared platform
 
 ```bash
 az deployment sub create \
+  --name lyhyt-platform-tst \
   --location swedencentral \
   --template-file infra/lyhyt-platform/main.bicep \
   --parameters infra/lyhyt-platform/environments/tst.bicepparam
@@ -106,6 +107,8 @@ requires a `v*` tag, such as `v2026.09.23`; the migration release version is
 derived from that tag. The customer tenant, subscription, location, migration
 identity, and deployment parameters come from the non-secret
 `config/customers.json` catalog. The subscription is never an operator input.
+Generated platform and customer resource IDs and URIs are deliberately not
+catalog fields; the workflow obtains them from Bicep deployment outputs.
 
 Before enabling the workflow, configure these GitHub variables:
 
@@ -138,6 +141,11 @@ network. A GitHub-hosted runner cannot reach a SQL server whose public access
 is disabled. Temporary `.bicepparam` files are rendered for each job and
 deleted after the job; do not read, modify, expose, or commit files matching
 `*.local.bicepparam`.
+
+The platform deployment must use a stable deployment name per environment
+(for example, `lyhyt-platform-tst`). The customer workflow reads the safe ACR
+and optional platform Key Vault outputs from that named deployment; it does not
+redeploy the shared platform for every customer.
 
 The safe Key Vault bootstrap is two-stage: deploy the LYHYT runtime once with
 Key Vault integration disabled to create its UAMI, then deploy the customer

@@ -37,7 +37,6 @@ REQUIRED_RUNTIME_PARAMETERS = frozenset({
     "functionHostStorageNetworkDefaultAction",
     "functionRuntimeConfiguration",
     "enableDoclingResources",
-    "containerRegistryReference",
     "containerImage",
     "keyVaultConfiguration",
     "enablePlatformKeyVaultRoleAssignment",

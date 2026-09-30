@@ -5,7 +5,7 @@
   with the infrastructure work.
 
   Scope:
-    - 36 application tables
+    - 39 application tables
     - primary keys, defaults, identities, unique constraints and indexes
     - foreign keys and delete actions
     - vw_projects
@@ -15,7 +15,7 @@
     - customer data
     - dbo.MSchange_tracking_history (system-managed)
     - sys.database_firewall_rules (system view)
-    - users, permissions and firewall configuration
+    - database principals, permissions and firewall configuration
 
   Execution:
     This draft uses SQLCMD GO batch separators. The future migration runner
@@ -34,7 +34,7 @@ CREATE TABLE [dbo].[cc_analysis] (
     [output] nvarchar(max) NOT NULL,
     [score] decimal(5,2) NOT NULL,
     [reasoning_output] nvarchar(max) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_analysis_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_analysis_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_analysis] PRIMARY KEY ([analysis_id])
 );
 GO
@@ -43,7 +43,7 @@ CREATE TABLE [dbo].[cc_categories] (
     [category_id] int IDENTITY(1,1) NOT NULL,
     [category] varchar(max) NOT NULL,
     [description] varchar(max) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_categories_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_categories_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_categories] PRIMARY KEY ([category_id])
 );
 GO
@@ -55,7 +55,7 @@ CREATE TABLE [dbo].[cc_document_types] (
     [doc_label] nvarchar(200) NOT NULL CONSTRAINT [DF_cc_document_types_doc_label] DEFAULT (''),
     [confidence] nvarchar(10) NOT NULL CONSTRAINT [DF_cc_document_types_confidence] DEFAULT (''),
     [note] nvarchar(400) NOT NULL CONSTRAINT [DF_cc_document_types_note] DEFAULT (''),
-    [classified_at] datetime2 NOT NULL CONSTRAINT [DF_cc_document_types_classified_at] DEFAULT (sysutcdatetime()),
+    [classified_at] datetime2(7) NOT NULL CONSTRAINT [DF_cc_document_types_classified_at] DEFAULT (sysutcdatetime()),
     [synopsis] nvarchar(max) NULL,
     [chunk_count] int NULL,
     CONSTRAINT [PK__cc_docum__9666E8ACD9D3541E] PRIMARY KEY ([document_id])
@@ -67,7 +67,7 @@ CREATE TABLE [dbo].[cc_info] (
     [projectrow_id] int NULL,
     [info] nvarchar(max) NULL,
     [document_type] nvarchar(50) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_info_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_info_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_info] PRIMARY KEY ([info_id])
 );
 GO
@@ -81,7 +81,7 @@ CREATE TABLE [dbo].[cc_lg_checkpoints] (
     [checkpoint] varbinary(max) NOT NULL,
     [metadata_type] nvarchar(60) NULL,
     [metadata] varbinary(max) NULL,
-    [created_at] datetime2 NOT NULL CONSTRAINT [DF_cc_lg_checkpoints_created_at] DEFAULT (sysutcdatetime()),
+    [created_at] datetime2(7) NOT NULL CONSTRAINT [DF_cc_lg_checkpoints_created_at] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_lg_checkpoints] PRIMARY KEY ([thread_id], [checkpoint_ns], [checkpoint_id])
 );
 GO
@@ -107,7 +107,7 @@ CREATE TABLE [dbo].[cc_locations] (
     [city] nvarchar(max) NOT NULL,
     [postcode] nvarchar(max) NOT NULL,
     [partner_id] int NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_locations_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_locations_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_locations] PRIMARY KEY ([location_id])
 );
 GO
@@ -120,8 +120,8 @@ CREATE TABLE [dbo].[cc_mail_origin] (
     [conversation_id] nvarchar(450) NULL,
     [internet_message_id] nvarchar(450) NULL,
     [created_by] nvarchar(320) NULL,
-    [created_at] datetime2 NOT NULL CONSTRAINT [DF_cc_mail_origin_created_at] DEFAULT (sysutcdatetime()),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_mail_origin_last_altered] DEFAULT (sysutcdatetime()),
+    [created_at] datetime2(3) NOT NULL CONSTRAINT [DF_cc_mail_origin_created_at] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_mail_origin_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_mail_origin] PRIMARY KEY ([reply_token])
 );
 GO
@@ -131,7 +131,7 @@ CREATE TABLE [dbo].[cc_nota] (
     [project_id] int NOT NULL,
     [nota] varchar(max) NOT NULL,
     [version] tinyint NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_nota_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_nota_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_nota] PRIMARY KEY ([Id])
 );
 GO
@@ -146,7 +146,7 @@ CREATE TABLE [dbo].[cc_offerte_summary] (
     [folder_id] nvarchar(max) NULL,
     [folder_url] nvarchar(max) NULL,
     [MailReviewId] int NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_offerte_summary_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_offerte_summary_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_offerte_summary] PRIMARY KEY ([id])
 );
 GO
@@ -161,7 +161,8 @@ CREATE TABLE [dbo].[cc_partners] (
     [Voorkeur] tinyint NULL,
     [ERP_key] int NULL,
     [engaged_partner] bit NOT NULL CONSTRAINT [DF_cc_partners_engaged_partner] DEFAULT ((0)),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_partners_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_partners_last_altered] DEFAULT (sysutcdatetime()),
+    [phone_number] nvarchar(100) NULL,
     CONSTRAINT [PK__cc_partn__576F1B2724FDDED4] PRIMARY KEY ([partner_id])
 );
 GO
@@ -171,9 +172,19 @@ CREATE TABLE [dbo].[cc_project_deadline_sync] (
     [deadline_field] nvarchar(32) NOT NULL,
     [deadline_date] date NOT NULL,
     [graph_event_id] nvarchar(300) NULL,
-    [reminder_sent_at] datetime2 NULL,
-    [updated_at] datetime2 NOT NULL CONSTRAINT [DF_cc_project_deadline_sync_updated_at] DEFAULT (sysutcdatetime()),
+    [reminder_sent_at] datetime2(3) NULL,
+    [updated_at] datetime2(3) NOT NULL CONSTRAINT [DF_cc_project_deadline_sync_updated_at] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_project_deadline_sync] PRIMARY KEY ([project_id], [deadline_field])
+);
+GO
+
+CREATE TABLE [dbo].[cc_project_group_members] (
+    [project_id] int NOT NULL,
+    [group_id] nvarchar(64) NOT NULL,
+    [role] nvarchar(32) NOT NULL,
+    [display_name] nvarchar(255) NOT NULL CONSTRAINT [DF_cc_project_group_members_display_name] DEFAULT (''),
+    [created_at] datetime2(7) NOT NULL CONSTRAINT [DF_cc_project_group_members_created_at] DEFAULT (sysutcdatetime()),
+    CONSTRAINT [PK_cc_project_group_members] PRIMARY KEY ([project_id], [group_id])
 );
 GO
 
@@ -181,7 +192,7 @@ CREATE TABLE [dbo].[cc_project_members] (
     [project_id] int NOT NULL,
     [user_sub] nvarchar(64) NOT NULL,
     [role] nvarchar(32) NOT NULL CONSTRAINT [DF_cc_project_members_role] DEFAULT ('owner'),
-    [created_at] datetime2 NULL CONSTRAINT [DF_cc_project_members_created_at] DEFAULT (sysutcdatetime()),
+    [created_at] datetime2(7) NULL CONSTRAINT [DF_cc_project_members_created_at] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_project_members] PRIMARY KEY ([project_id], [user_sub])
 );
 GO
@@ -202,12 +213,13 @@ CREATE TABLE [dbo].[cc_projects] (
     [status] nvarchar(50) NULL,
     [schema_id] int NULL,
     [pending_manifest] nvarchar(max) NULL,
-    [status_changed_at] datetime2 NULL,
+    [status_changed_at] datetime2(7) NULL,
     [creation_state] nvarchar(20) NULL,
     [extern_share_link] nvarchar(2048) NULL,
     [extraction_run_id] nvarchar(64) NULL,
-    [extraction_run_started_at] datetime2 NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_projects_last_altered] DEFAULT (sysutcdatetime()),
+    [extraction_run_started_at] datetime2(7) NULL,
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_projects_last_altered] DEFAULT (sysutcdatetime()),
+    [project_status] nvarchar(50) NOT NULL CONSTRAINT [DF_cc_projects_project_status] DEFAULT ('Aanbesteding'),
     CONSTRAINT [PK__cc_proje__BC799E1F5B985B21] PRIMARY KEY ([project_id])
 );
 GO
@@ -223,7 +235,7 @@ CREATE TABLE [dbo].[cc_projectrows] (
     [is_active] bit NOT NULL CONSTRAINT [DF_cc_projectrows_is_active] DEFAULT ((1)),
     [confidence] nvarchar(10) NULL,
     [auto_accept] bit NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_projectrows_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_projectrows_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK__cc_proje__184F67B8C5567728] PRIMARY KEY ([projectrow_id])
 );
 GO
@@ -236,7 +248,7 @@ CREATE TABLE [dbo].[cc_projectsources] (
     [document_id] nvarchar(128) NULL,
     [drive_id] nvarchar(256) NULL,
     [item_guid] nvarchar(64) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_projectsources_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_projectsources_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_projectsources] PRIMARY KEY ([source_id])
 );
 GO
@@ -245,7 +257,7 @@ CREATE TABLE [dbo].[cc_prompting] (
     [Id] int IDENTITY(1,1) NOT NULL,
     [beschrijving] nvarchar(max) NOT NULL,
     [prompt] nvarchar(max) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_prompting_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_prompting_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_dbo.cc_prompting] PRIMARY KEY ([Id])
 );
 GO
@@ -256,7 +268,7 @@ CREATE TABLE [dbo].[cc_prompts] (
     [item] varchar(10) NOT NULL,
     [category] int NOT NULL,
     [prompting_id] int NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_prompts_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_prompts_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_prompts] PRIMARY KEY ([prompt_id])
 );
 GO
@@ -271,8 +283,19 @@ CREATE TABLE [dbo].[cc_requests] (
     [quote_file] nvarchar(255) NULL,
     [status] nvarchar(20) NOT NULL CONSTRAINT [DF_cc_requests_status] DEFAULT ('open'),
     [approved] bit NOT NULL CONSTRAINT [DF_cc_requests_approved] DEFAULT ((0)),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_requests_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_requests_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK__cc_reque__18D3B90FE0763497] PRIMARY KEY ([request_id])
+);
+GO
+
+CREATE TABLE [dbo].[cc_role_grants] (
+    [principal_type] nvarchar(10) NOT NULL,
+    [principal_id] nvarchar(64) NOT NULL,
+    [role] nvarchar(32) NOT NULL,
+    [display_name] nvarchar(255) NOT NULL CONSTRAINT [DF_cc_role_grants_display_name] DEFAULT (''),
+    [granted_by] nvarchar(64) NULL,
+    [granted_at] datetime2(7) NOT NULL CONSTRAINT [DF_cc_role_grants_granted_at] DEFAULT (sysutcdatetime()),
+    CONSTRAINT [PK_cc_role_grants] PRIMARY KEY ([principal_type], [principal_id])
 );
 GO
 
@@ -280,7 +303,7 @@ CREATE TABLE [dbo].[cc_schema] (
     [schema_id] int IDENTITY(1,1) NOT NULL,
     [schema_json] json NULL,
     [isactief] bit NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_schema_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_schema_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_schema] PRIMARY KEY ([schema_id])
 );
 GO
@@ -289,7 +312,7 @@ CREATE TABLE [dbo].[cc_services] (
     [service_id] int IDENTITY(1,1) NOT NULL,
     [partner_id] int NOT NULL,
     [stabucode] varchar(10) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_services_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_services_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK__cc_servi__3E0DB8AF19B0B0E5] PRIMARY KEY ([service_id])
 );
 GO
@@ -302,7 +325,7 @@ CREATE TABLE [dbo].[cc_sessions] (
     [last_seen] float(53) NOT NULL,
     [thread_id] nvarchar(64) NULL,
     [answered_checkpoint] nvarchar(64) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_sessions_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_sessions_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_sessions] PRIMARY KEY ([id])
 );
 GO
@@ -339,7 +362,7 @@ CREATE TABLE [dbo].[cc_sources] (
     [document_id] nvarchar(128) NULL,
     [drive_id] nvarchar(256) NULL,
     [item_guid] nvarchar(64) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_sources_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_sources_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_sources] PRIMARY KEY ([source_id])
 );
 GO
@@ -348,7 +371,7 @@ CREATE TABLE [dbo].[cc_stabucodes] (
     [code] varchar(10) NOT NULL,
     [description] varchar(max) NOT NULL,
     [parent_code] varchar(10) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_stabucodes_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_stabucodes_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK__cc_stabu__357D4CF89F87BF9E] PRIMARY KEY ([code])
 );
 GO
@@ -363,8 +386,17 @@ CREATE TABLE [dbo].[cc_test] (
     [deadline_quotes] date NULL,
     [information_link] varchar(max) NULL,
     [approved] bit NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_test_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_test_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK__cc_test__BC799E1F9953699F] PRIMARY KEY ([project_id])
+);
+GO
+
+CREATE TABLE [dbo].[cc_users] (
+    [user_sub] nvarchar(64) NOT NULL,
+    [username] nvarchar(320) NOT NULL CONSTRAINT [DF_cc_users_username] DEFAULT (''),
+    [name] nvarchar(255) NOT NULL CONSTRAINT [DF_cc_users_name] DEFAULT (''),
+    [last_login] datetime2(7) NULL CONSTRAINT [DF_cc_users_last_login] DEFAULT (sysutcdatetime()),
+    CONSTRAINT [PK_cc_users] PRIMARY KEY ([user_sub])
 );
 GO
 
@@ -372,7 +404,7 @@ CREATE TABLE [dbo].[cc_werk_type] (
     [werk_type_id] int IDENTITY(1,1) NOT NULL,
     [werk_type] nvarchar(max) NOT NULL,
     [description] nvarchar(max) NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_cc_werk_type_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_cc_werk_type_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_cc_werk_type] PRIMARY KEY ([werk_type_id])
 );
 GO
@@ -386,7 +418,7 @@ CREATE TABLE [dbo].[getemail] (
     [ReviewId] int NULL,
     [FailureCount] int NOT NULL CONSTRAINT [DF_getemail_FailureCount] DEFAULT ((0)),
     [TrackingMailbox] nvarchar(320) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_getemail_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_getemail_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_getemail] PRIMARY KEY ([Id])
 );
 GO
@@ -396,10 +428,10 @@ CREATE TABLE [dbo].[graph_subscription] (
     [Mailbox] nvarchar(320) NOT NULL,
     [SubscriptionId] nvarchar(64) NOT NULL,
     [Resource] nvarchar(1024) NOT NULL,
-    [ExpirationDateTime] datetime2 NOT NULL,
-    [CreatedAt] datetime2 NOT NULL CONSTRAINT [DF_graph_subscription_CreatedAt] DEFAULT (sysutcdatetime()),
-    [UpdatedAt] datetime2 NOT NULL CONSTRAINT [DF_graph_subscription_UpdatedAt] DEFAULT (sysutcdatetime()),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_graph_subscription_last_altered] DEFAULT (sysutcdatetime()),
+    [ExpirationDateTime] datetime2(3) NOT NULL,
+    [CreatedAt] datetime2(3) NOT NULL CONSTRAINT [DF_graph_subscription_CreatedAt] DEFAULT (sysutcdatetime()),
+    [UpdatedAt] datetime2(3) NOT NULL CONSTRAINT [DF_graph_subscription_UpdatedAt] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_graph_subscription_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_graph_subscription] PRIMARY KEY ([Id])
 );
 GO
@@ -408,8 +440,8 @@ CREATE TABLE [dbo].[graph_sync_state] (
     [Id] int IDENTITY(1,1) NOT NULL,
     [Mailbox] nvarchar(320) NOT NULL,
     [DeltaLink] nvarchar(max) NOT NULL,
-    [UpdatedAt] datetime2 NOT NULL CONSTRAINT [DF_graph_sync_state_UpdatedAt] DEFAULT (sysutcdatetime()),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_graph_sync_state_last_altered] DEFAULT (sysutcdatetime()),
+    [UpdatedAt] datetime2(3) NOT NULL CONSTRAINT [DF_graph_sync_state_UpdatedAt] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_graph_sync_state_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_graph_sync_state] PRIMARY KEY ([Id])
 );
 GO
@@ -425,15 +457,15 @@ CREATE TABLE [dbo].[mail_review] (
     [ProjectId] int NULL,
     [PartnerId] int NULL,
     [Status] nvarchar(50) NOT NULL CONSTRAINT [DF_mail_review_Status] DEFAULT (N'Pending'),
-    [CreatedAt] datetime2 NOT NULL CONSTRAINT [DF_mail_review_CreatedAt] DEFAULT (sysutcdatetime()),
+    [CreatedAt] datetime2(3) NOT NULL CONSTRAINT [DF_mail_review_CreatedAt] DEFAULT (sysutcdatetime()),
     [ReplyToken] nvarchar(32) NULL,
     [ConversationId] nvarchar(450) NULL,
     [MailMsgBlobContainer] nvarchar(100) NULL,
     [MailMsgBlobPath] nvarchar(1024) NULL,
     [DuplicateOfReviewId] int NULL,
     [FiledSubfolder] nvarchar(400) NULL,
-    [ReceivedDateTime] datetime2 NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_mail_review_last_altered] DEFAULT (sysutcdatetime()),
+    [ReceivedDateTime] datetime2(3) NULL,
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_mail_review_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_mail_review] PRIMARY KEY ([Id])
 );
 GO
@@ -446,8 +478,8 @@ CREATE TABLE [dbo].[mail_review_attachment] (
     [BlobContainer] nvarchar(100) NOT NULL,
     [BlobPath] nvarchar(1024) NOT NULL,
     [SizeBytes] bigint NULL,
-    [CreatedAt] datetime2 NOT NULL CONSTRAINT [DF_mail_review_attachment_CreatedAt] DEFAULT (sysutcdatetime()),
-    [last_altered] datetime2 NULL CONSTRAINT [DF_mail_review_attachment_last_altered] DEFAULT (sysutcdatetime()),
+    [CreatedAt] datetime2(3) NOT NULL CONSTRAINT [DF_mail_review_attachment_CreatedAt] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_mail_review_attachment_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_mail_review_attachment] PRIMARY KEY ([Id])
 );
 GO
@@ -456,7 +488,7 @@ CREATE TABLE [dbo].[settings_attributes] (
     [attribute_id] int IDENTITY(1,1) NOT NULL,
     [name] nvarchar(50) NOT NULL,
     [type] nvarchar(50) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_settings_attributes_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_settings_attributes_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_settings_attributes] PRIMARY KEY ([attribute_id])
 );
 GO
@@ -466,7 +498,7 @@ CREATE TABLE [dbo].[settings_entity] (
     [type] nvarchar(50) NULL,
     [parent_entity] int NULL,
     [name] nvarchar(50) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_settings_entity_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_settings_entity_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_settings_entity] PRIMARY KEY ([entity_id])
 );
 GO
@@ -476,19 +508,13 @@ CREATE TABLE [dbo].[settings_value] (
     [entity_id] int NOT NULL,
     [attribute_id] int NOT NULL,
     [value] nvarchar(max) NOT NULL,
-    [last_altered] datetime2 NULL CONSTRAINT [DF_settings_value_last_altered] DEFAULT (sysutcdatetime()),
+    [last_altered] datetime2(6) NULL CONSTRAINT [DF_settings_value_last_altered] DEFAULT (sysutcdatetime()),
     CONSTRAINT [PK_settings_value] PRIMARY KEY ([value_id])
 );
 GO
 
 ALTER TABLE [dbo].[cc_nota]
     ADD CONSTRAINT [UQ_cc_nota_project_version] UNIQUE ([project_id], [version]);
-ALTER TABLE [dbo].[cc_projectrows]
-    ADD CONSTRAINT [UX_cc_projectrows_project_stabucode] UNIQUE ([project_id], [stabucode]);
-ALTER TABLE [dbo].[cc_projects]
-    ADD CONSTRAINT [UX_cc_projects_information_folder] UNIQUE ([information_folder]);
-ALTER TABLE [dbo].[cc_services]
-    ADD CONSTRAINT [UX_cc_services_partner_id_stabucode] UNIQUE ([partner_id], [stabucode]);
 ALTER TABLE [dbo].[cc_test]
     ADD CONSTRAINT [UQ__cc_test__72E12F1B6CD2900C] UNIQUE ([name]);
 ALTER TABLE [dbo].[getemail]
@@ -497,16 +523,26 @@ ALTER TABLE [dbo].[graph_subscription]
     ADD CONSTRAINT [UQ_graph_subscription_Mailbox] UNIQUE ([Mailbox]);
 ALTER TABLE [dbo].[graph_sync_state]
     ADD CONSTRAINT [UQ_graph_sync_state_Mailbox] UNIQUE ([Mailbox]);
-ALTER TABLE [dbo].[mail_review]
-    ADD CONSTRAINT [UQ_mail_review_InternetMessageId] UNIQUE ([InternetMessageId]);
 GO
 
+CREATE UNIQUE INDEX [UX_cc_projectrows_project_stabucode]
+    ON [dbo].[cc_projectrows] ([project_id], [stabucode]);
+CREATE UNIQUE INDEX [UX_cc_projects_information_folder]
+    ON [dbo].[cc_projects] ([information_folder])
+    WHERE [information_folder] IS NOT NULL AND [information_folder] <> N'';
+CREATE UNIQUE INDEX [UX_cc_services_partner_id_stabucode]
+    ON [dbo].[cc_services] ([partner_id], [stabucode]);
+CREATE UNIQUE INDEX [UQ_mail_review_InternetMessageId]
+    ON [dbo].[mail_review] ([InternetMessageId])
+    WHERE [InternetMessageId] IS NOT NULL;
 CREATE INDEX [IX_cc_lg_checkpoints_created_at]
     ON [dbo].[cc_lg_checkpoints] ([created_at], [thread_id]);
 CREATE INDEX [IX_cc_offerte_summary_MailReviewId]
     ON [dbo].[cc_offerte_summary] ([MailReviewId]);
 CREATE INDEX [IX_cc_project_members_user]
     ON [dbo].[cc_project_members] ([user_sub]);
+CREATE INDEX [IX_cc_project_group_members_group]
+    ON [dbo].[cc_project_group_members] ([group_id]);
 CREATE INDEX [IX_cc_requests_partner_id_project_id]
     ON [dbo].[cc_requests] ([partner_id], [project_id])
     INCLUDE ([projectrow_id], [requested_at], [last_reminded_at], [quote_file], [status], [approved]);
@@ -540,6 +576,31 @@ CREATE INDEX [IX_mail_review_Status]
     ON [dbo].[mail_review] ([Status]);
 CREATE INDEX [IX_mail_review_attachment_MailReviewId]
     ON [dbo].[mail_review_attachment] ([MailReviewId]);
+GO
+
+ALTER TABLE [dbo].[cc_project_group_members] WITH CHECK
+    ADD CONSTRAINT [CK_cc_project_group_members_role]
+    CHECK ([role] = N'viewer' OR [role] = N'editor');
+ALTER TABLE [dbo].[cc_project_group_members]
+    CHECK CONSTRAINT [CK_cc_project_group_members_role];
+
+ALTER TABLE [dbo].[cc_project_members] WITH CHECK
+    ADD CONSTRAINT [CK_cc_project_members_role]
+    CHECK ([role] = N'viewer' OR [role] = N'editor' OR [role] = N'owner');
+ALTER TABLE [dbo].[cc_project_members]
+    CHECK CONSTRAINT [CK_cc_project_members_role];
+
+ALTER TABLE [dbo].[cc_role_grants] WITH CHECK
+    ADD CONSTRAINT [CK_cc_role_grants_principal_type]
+    CHECK ([principal_type] = N'group' OR [principal_type] = N'user');
+ALTER TABLE [dbo].[cc_role_grants]
+    CHECK CONSTRAINT [CK_cc_role_grants_principal_type];
+
+ALTER TABLE [dbo].[cc_role_grants] WITH CHECK
+    ADD CONSTRAINT [CK_cc_role_grants_role]
+    CHECK ([role] = N'lezer' OR [role] = N'calculator' OR [role] = N'beheerder');
+ALTER TABLE [dbo].[cc_role_grants]
+    CHECK CONSTRAINT [CK_cc_role_grants_role];
 GO
 
 ALTER TABLE [dbo].[cc_analysis] WITH CHECK
@@ -672,11 +733,6 @@ ALTER TABLE [dbo].[cc_services] WITH CHECK
     FOREIGN KEY ([stabucode]) REFERENCES [dbo].[cc_stabucodes] ([code]);
 ALTER TABLE [dbo].[cc_services] CHECK CONSTRAINT [FK__cc_servic__stabu__32AB8735];
 
-ALTER TABLE [dbo].[cc_services] WITH CHECK
-    ADD CONSTRAINT [FK__cc_servic__stabu__339FAB6E]
-    FOREIGN KEY ([stabucode]) REFERENCES [dbo].[cc_stabucodes] ([code]);
-ALTER TABLE [dbo].[cc_services] CHECK CONSTRAINT [FK__cc_servic__stabu__339FAB6E];
-
 ALTER TABLE [dbo].[cc_source_pointers] WITH CHECK
     ADD CONSTRAINT [FK_cc_source_pointers_cc_sources]
     FOREIGN KEY ([source_id]) REFERENCES [dbo].[cc_sources] ([source_id])
@@ -693,11 +749,6 @@ ALTER TABLE [dbo].[cc_stabucodes] WITH CHECK
     ADD CONSTRAINT [FK__cc_stabuc__paren__367C1819]
     FOREIGN KEY ([parent_code]) REFERENCES [dbo].[cc_stabucodes] ([code]);
 ALTER TABLE [dbo].[cc_stabucodes] CHECK CONSTRAINT [FK__cc_stabuc__paren__367C1819];
-
-ALTER TABLE [dbo].[cc_stabucodes] WITH CHECK
-    ADD CONSTRAINT [FK__cc_stabuc__paren__37703C52]
-    FOREIGN KEY ([parent_code]) REFERENCES [dbo].[cc_stabucodes] ([code]);
-ALTER TABLE [dbo].[cc_stabucodes] CHECK CONSTRAINT [FK__cc_stabuc__paren__37703C52];
 
 ALTER TABLE [dbo].[getemail] WITH CHECK
     ADD CONSTRAINT [FK_getemail_mail_review]
