@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-customer.json"
-          python3 scripts/pipeline/resolve_runtime_customer.py \
+          python3 -m scripts.pipeline.resolve_runtime_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
@@ -207,7 +207,7 @@ jobs:
           RUNTIME_DEPLOYMENT_ERROR_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-existing-XXXXXX.err")"
           trap 'rm -f "$PARAM_FILE" "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE" "$RUNTIME_DEPLOYMENT_ERROR_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-bootstrap.json"
-          python3 scripts/pipeline/resolve_runtime_customer.py \
+          python3 -m scripts.pipeline.resolve_runtime_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
@@ -452,7 +452,7 @@ jobs:
           print(vault_name)
           PY
           )"
-          python3 scripts/pipeline/publish_runtime_configuration.py --runtime-only \
+          python3 -m scripts.pipeline.publish_runtime_configuration --runtime-only \
             --runtime-outputs "$RUNTIME_OUTPUTS_FILE" \
             --customer-tenant-id "$CUSTOMER_TENANT_ID" \
             --vault-name "$RUNTIME_KEY_VAULT_NAME"
@@ -491,7 +491,7 @@ jobs:
           trap 'rm -f "$PARAM_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-final.json"
           RUNTIME_OUTPUTS_FILE="${RUNNER_TEMP}/lyhyt-runtime-final-outputs.json"
-          python3 scripts/pipeline/resolve_runtime_customer.py \
+          python3 -m scripts.pipeline.resolve_runtime_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
