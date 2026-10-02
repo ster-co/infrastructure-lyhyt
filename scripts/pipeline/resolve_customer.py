@@ -16,7 +16,6 @@ from typing import Any
 REQUIRED_FOUNDATION_PARAMETERS = frozenset({
     "sqlEntraAdministratorLogin",
     "sqlEntraAdministratorObjectId",
-    "sqlEntraAdministratorPrincipalType",
     "sqlEntraAdministratorTenantId",
     "sqlEntraOnlyAuthentication",
     "storageContainerNames",

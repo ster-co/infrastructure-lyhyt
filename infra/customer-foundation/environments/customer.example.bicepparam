@@ -9,7 +9,6 @@ param regionCode = 'swec'
 param customerTenantId = '00000000-0000-0000-0000-000000000000'
 param sqlEntraAdministratorLogin = 'replace-with-customer-entra-admin'
 param sqlEntraAdministratorObjectId = '00000000-0000-0000-0000-000000000000'
-param sqlEntraAdministratorPrincipalType = 'User'
 param sqlEntraAdministratorTenantId = '00000000-0000-0000-0000-000000000000'
 param sqlEntraOnlyAuthentication = true
 

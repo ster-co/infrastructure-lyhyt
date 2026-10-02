@@ -23,7 +23,6 @@
           "foundationParameters": {
             "sqlEntraAdministratorLogin": "LYHYT Infrastructure TST",
             "sqlEntraAdministratorObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
-            "sqlEntraAdministratorPrincipalType": "ServicePrincipal",
             "sqlEntraAdministratorTenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
             "sqlEntraOnlyAuthentication": true,
             "storageContainerNames": ["rag-files", "offerte-backups"],

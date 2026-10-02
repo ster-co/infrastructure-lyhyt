@@ -2,6 +2,10 @@ name: Customer foundation SQL and runtime
 
 run-name: Deploy ${{ inputs.customer_id }}/${{ inputs.environment }} from ${{ github.ref_name }}
 
+concurrency:
+  group: customer-foundation-${{ inputs.customer_id }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
