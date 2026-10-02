@@ -61,7 +61,7 @@ git diff --check
 
 ## Deployment order
 
-Deploy the shared platform first, then bootstrap the LYHYT runtime to create its per-customer identities and exactly one runtime Key Vault. Apply the customer foundation, publish the complete runtime configuration from safe deployment outputs, and redeploy or restart the runtime with the runtime vault URI. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Keep `REQUIRE_KEY_VAULT=false` until application validation and restart workloads after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
+The shared platform must already exist. The customer workflow reads its safe ACR and optional platform Key Vault outputs without redeploying it, applies the selected customer foundation first, runs the customer SQL gates, then bootstraps or discovers that customer's LYHYT runtime. It publishes the safe foundation and runtime outputs into the per-customer runtime Key Vault and performs the final runtime deployment with the vault URI. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Keep `REQUIRE_KEY_VAULT=false` until application validation and restart workloads after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
 
 ### 1. Shared platform
 
@@ -175,13 +175,14 @@ The platform deployment must use a stable deployment name per environment
 and optional platform Key Vault outputs from that named deployment; it does not
 redeploy the shared platform for every customer.
 
-The safe Key Vault bootstrap is two-stage: create the LYHYT runtime vault and
-identities, then apply the customer foundation, publish all runtime entries,
-and redeploy or restart the runtime with the runtime vault URI. Populate real
-operator-managed secrets later through a secured workflow, validate the
-application, and only then set `REQUIRE_KEY_VAULT=true`. The customer
-foundation vault remains customer-tenant-owned and receives no runtime-owned
-values. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) and
+The safe Key Vault handoff is customer-first: apply the customer foundation,
+run the SQL gates, then create or discover the LYHYT runtime vault and
+identities, publish all runtime entries, and redeploy or restart the runtime
+with the runtime vault URI. Populate real operator-managed secrets later
+through a secured workflow, validate the application, and only then set
+`REQUIRE_KEY_VAULT=true`. The customer foundation vault remains
+customer-tenant-owned and receives no runtime-owned values. See
+[`docs/key-vault-contract.md`](docs/key-vault-contract.md) and
 [`docs/database/migrations/README.md`](docs/database/migrations/README.md) for
 the detailed bootstrap, permissions, migration authoring, Stabu code
 reference-data import, and operations runbooks.

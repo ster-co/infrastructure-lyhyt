@@ -58,7 +58,6 @@ jobs:
       lyhyt_runtime_subscription_id: ${{ steps.resolve.outputs.lyhyt_runtime_subscription_id }}
       customer_sql_runner_label: ${{ steps.resolve.outputs.customer_sql_runner_label }}
       needs_runtime_bootstrap: ${{ steps.resolve.outputs.needs_runtime_bootstrap }}
-      same_tenant_rbac_enabled: ${{ steps.resolve.outputs.same_tenant_rbac_enabled }}
       runtime_key_vault_enabled: ${{ steps.resolve.outputs.runtime_key_vault_enabled }}
     steps:
       - name: Check out repository
@@ -120,7 +119,6 @@ jobs:
               "lyhyt_runtime_subscription_id": resolved["automation"]["lyhytRuntimeSubscriptionId"],
               "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
               "needs_runtime_bootstrap": str(needs_bootstrap).lower(),
-              "same_tenant_rbac_enabled": "false",
               "runtime_key_vault_enabled": str(key_vault["enabled"]).lower(),
           }
           with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
@@ -199,8 +197,8 @@ jobs:
           PY
 
   lyhyt_runtime_bootstrap:
-    needs: [resolve, lyhyt_platform]
-    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'true' }}
+    needs: [resolve, lyhyt_platform, customer_foundation_apply, customer_sql_complete]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_sql_complete.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       identity_principal_id: ${{ steps.bootstrap.outputs.identity_principal_id }}
@@ -385,8 +383,8 @@ jobs:
           PY
 
   lyhyt_runtime_existing:
-    needs: [resolve, lyhyt_platform]
-    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'false' }}
+    needs: [resolve, lyhyt_platform, customer_foundation_apply, customer_sql_complete]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_sql_complete.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'false' }}
     runs-on: ubuntu-latest
     outputs:
       identity_principal_id: ${{ steps.discover.outputs.identity_principal_id }}
@@ -422,14 +420,16 @@ jobs:
           REGION_CODE: ${{ needs.resolve.outputs.region_code }}
           LYHYT_AZURE_CLIENT_ID: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
           LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+          RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
           DEPLOYMENT_OUTPUTS_FILE: ${{ runner.temp }}/runtime-deployment-outputs.json
         shell: bash
         run: |
           set -euo pipefail
           RUNTIME_RESOURCE_GROUP="rg-lyhyt-${CUSTOMER_ID}-${DEPLOYMENT_ENVIRONMENT}-${REGION_CODE}"
           RUNTIME_CONTAINER_APP="ca-lyhyt-${CUSTOMER_ID}-api-${DEPLOYMENT_ENVIRONMENT}"
-          az deployment sub list \
-            --query "[?properties.provisioningState=='Succeeded']" \
+          az deployment sub show \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --query properties \
             --output json > "$DEPLOYMENT_OUTPUTS_FILE"
           REQUIRE_KEY_VAULT="$(az containerapp show \
             --name "$RUNTIME_CONTAINER_APP" \
@@ -450,35 +450,25 @@ jobs:
           )
 
           try:
-              deployments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-              if not isinstance(deployments, list):
-                  raise ValueError("subscription deployments must be a list")
+              deployment = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              if not isinstance(deployment, dict):
+                  raise ValueError("runtime deployment properties must be an object")
+              if deployment.get("provisioningState") != "Succeeded":
+                  raise ValueError("named runtime deployment did not succeed")
               expected_resource_group = sys.argv[4].casefold()
-              candidates = []
-              for deployment in deployments:
-                  properties = deployment.get("properties") if isinstance(deployment, dict) else None
-                  if not isinstance(properties, dict):
-                      continue
-                  try:
-                      values = extract_runtime_outputs(properties.get("outputs")).to_safe_dict()
-                      validate_resource_id_subscription(
-                          values["runtimeKeyVaultResourceId"],
-                          sys.argv[3],
-                          "Microsoft.KeyVault",
-                      )
-                  except (TypeError, ValueError):
-                      continue
-                  resource_group_segment = "/resourcegroups/"
-                  resource_id = values["runtimeKeyVaultResourceId"].casefold()
-                  if resource_group_segment not in resource_id:
-                      continue
-                  resource_group = resource_id.split(resource_group_segment, 1)[1].split("/", 1)[0]
-                  if resource_group != expected_resource_group:
-                      continue
-                  candidates.append((str(properties.get("timestamp") or ""), values))
-              if not candidates:
-                  raise ValueError("no successful runtime deployment outputs matched the existing runtime")
-              values = max(candidates, key=lambda item: item[0])[1]
+              values = extract_runtime_outputs(deployment.get("outputs")).to_safe_dict()
+              validate_resource_id_subscription(
+                  values["runtimeKeyVaultResourceId"],
+                  sys.argv[3],
+                  "Microsoft.KeyVault",
+              )
+              resource_group_segment = "/resourcegroups/"
+              resource_id = values["runtimeKeyVaultResourceId"].casefold()
+              if resource_group_segment not in resource_id:
+                  raise ValueError("runtime vault resource ID has no resource group")
+              resource_group = resource_id.split(resource_group_segment, 1)[1].split("/", 1)[0]
+              if resource_group != expected_resource_group:
+                  raise ValueError("runtime deployment outputs belong to another customer resource group")
               if not os.environ.get("REQUIRE_KEY_VAULT", "").strip():
                   raise ValueError("existing runtime does not expose REQUIRE_KEY_VAULT")
               if not os.environ.get("PUBLISHER_PRINCIPAL_ID", "").strip():
@@ -529,8 +519,8 @@ jobs:
         run: echo "Using the existing runtime handoff when bootstrap is skipped."
 
   customer_foundation_what_if:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.lyhyt_runtime_outputs.result == 'success' }}
+    needs: [resolve, lyhyt_platform]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -559,9 +549,6 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
-          SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
-          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_outputs.outputs.identity_principal_id }}
-          LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
         run: |
@@ -578,7 +565,6 @@ jobs:
             --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
-          import os
           import sys
           from pathlib import Path
 
@@ -586,16 +572,8 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["foundationParameters"])
-          if os.environ["SAME_TENANT_RBAC_ENABLED"] == "true":
-              customer_tenant_id = resolved["customerTenantId"]
-              lyhyt_tenant_id = os.environ["LYHYT_TENANT_ID"]
-              if not lyhyt_tenant_id or customer_tenant_id.casefold() != lyhyt_tenant_id.casefold():
-                  raise SystemExit("same-tenant runtime Key Vault RBAC requires matching tenants")
-              principal_id = os.environ["BOOTSTRAP_PRINCIPAL_ID"]
-              if not principal_id:
-                  raise SystemExit("runtime bootstrap did not return a principal ID")
-              parameters["runtimeAccessPrincipalId"] = principal_id
-              parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = True
+          parameters["runtimeAccessPrincipalId"] = ""
+          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep lint --file "$FOUNDATION_TEMPLATE"
@@ -606,8 +584,8 @@ jobs:
             --template-file "$FOUNDATION_TEMPLATE"
 
   customer_foundation_apply:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs, customer_foundation_what_if]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_what_if.result == 'success' && needs.lyhyt_runtime_outputs.result == 'success' }}
+    needs: [resolve, lyhyt_platform, customer_foundation_what_if]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_what_if.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: customer-foundation-apply
@@ -643,9 +621,6 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
-          SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
-          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_outputs.outputs.identity_principal_id }}
-          LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
@@ -664,7 +639,6 @@ jobs:
             --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
-          import os
           import sys
           from pathlib import Path
 
@@ -672,20 +646,13 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["foundationParameters"])
-          if os.environ["SAME_TENANT_RBAC_ENABLED"] == "true":
-              customer_tenant_id = resolved["customerTenantId"]
-              lyhyt_tenant_id = os.environ["LYHYT_TENANT_ID"]
-              if not lyhyt_tenant_id or customer_tenant_id.casefold() != lyhyt_tenant_id.casefold():
-                  raise SystemExit("same-tenant runtime Key Vault RBAC requires matching tenants")
-              principal_id = os.environ["BOOTSTRAP_PRINCIPAL_ID"]
-              if not principal_id:
-                  raise SystemExit("runtime bootstrap did not return a principal ID")
-              parameters["runtimeAccessPrincipalId"] = principal_id
-              parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = True
+          parameters["runtimeAccessPrincipalId"] = ""
+          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
           az deployment sub create --parameters "$PARAM_FILE" \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
             --query properties.outputs \
@@ -1052,6 +1019,15 @@ jobs:
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --output json
 
+  customer_sql_complete:
+    needs: [resolve, sql_migration_preflight, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.sql_migration_preflight.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm customer SQL deployment completed
+        shell: bash
+        run: echo "Customer SQL migration path completed successfully."
+
   lyhyt_runtime:
     needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs, customer_foundation_apply, runtime_configuration_publish, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
     if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.runtime_configuration_publish.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
@@ -1083,6 +1059,7 @@ jobs:
           CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
           CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+          RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1152,6 +1129,7 @@ jobs:
           az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
           az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
           az deployment sub create --parameters "$PARAM_FILE" \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$RUNTIME_TEMPLATE" \
             --output none

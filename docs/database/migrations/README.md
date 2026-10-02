@@ -283,26 +283,21 @@ can log in with the catalog migration application client ID.
 
 The LYHYT runtime owns one per-customer runtime Key Vault. Key Vault
 integration is enabled only after the vault and runtime identities exist.
-Follow this order:
 
-1. Deploy the shared platform and record its safe ACR outputs.
-2. Bootstrap the customer runtime in the LYHYT tenant and runtime
-   subscription. This creates the runtime Key Vault and the Container App,
-   document-parser, mailbox-sync, and SDB identities. Capture only safe vault,
-   identity, and Function hostname outputs.
-3. Apply the customer foundation in the customer tenant. Do not grant LYHYT
-   identities customer-vault access; cross-tenant access must use the approved
-   customer enterprise-application and federation boundary.
-4. Publish all 49 runtime entries to the LYHYT runtime vault. Hydrate safe
-   SQL, AI, Search, deployment, tenant, and Function endpoint values from
-   outputs; create `not-configured` for every unavailable value. Never pass
-   secret values through Bicep, catalog JSON, deployment outputs, or logs.
-5. Redeploy or restart the runtime with the runtime vault URI through the
-   existing `CLIENT_KEY_VAULT_URI` and `PLATFORM_KEY_VAULT_URI` settings.
-   Keep `requireKeyVault=false` until application validation succeeds.
-6. Set `requireKeyVault=true` only after validation. Rotate operator-managed
-   values in the runtime vault and restart workloads when application startup
-   caching requires it.
+1. Read the pre-provisioned shared LYHYT platform deployment outputs; do not
+   deploy shared platform resources from the customer workflow.
+2. Apply the selected customer foundation and capture its validated safe
+   outputs.
+3. Run SQL preflight, migration planning, and exactly one approved migration
+   execution path.
+4. Bootstrap or discover the selected customer's LYHYT runtime using the
+   stable customer/environment/region deployment name.
+5. Publish safe foundation and runtime outputs into that customer's LYHYT
+   runtime Key Vault, then deploy the final runtime with its vault URI.
+6. Keep `requireKeyVault=false` until application validation succeeds. Set it
+   to `true` only after validation; rotate operator-managed values in the
+   runtime vault and restart workloads when application startup caching
+   requires it.
 
 The current infrastructure uses Entra-only SQL authentication and creates no
 SQL password. `db-password` therefore remains `not-configured`; SDB SQL access
