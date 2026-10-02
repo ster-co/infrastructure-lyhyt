@@ -9,10 +9,10 @@
         "applicationClientId": "8326570e-3332-46d2-90b4-632498b943ae"
       },
       "automation": {
-        "lyhytAzureClientId": "c8cc62b3-7576-43fc-9d12-200324234db7",
-        "lyhytAzureTenantId": "dc5495f6-68fa-44ba-af3e-ae5e88cf1d7b",
-        "lyhytPlatformSubscriptionId": "3f979121-ee6c-4e8e-905f-644525f4a8f9",
-        "lyhytRuntimeSubscriptionId": "3f979121-ee6c-4e8e-905f-644525f4a8f9",
+        "lyhytAzureClientId": "8326570e-3332-46d2-90b4-632498b943ae",
+        "lyhytAzureTenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+        "lyhytPlatformSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+        "lyhytRuntimeSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
         "customerSqlRunnerLabel": "ubuntu-latest"
       },
       "environments": {
