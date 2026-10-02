@@ -17,6 +17,16 @@ _OUTPUT_NAMES = (
     "searchEndpoint",
     "aiEndpoint",
 )
+_OPTIONAL_FOUNDATION_OUTPUT_NAMES = (
+    "storageAccountName",
+    "blobEndpoint",
+    "searchServiceName",
+    "documentIntelligenceEndpoint",
+    "gpt5DeploymentName",
+    "gpt54DeploymentName",
+    "gpt5MiniDeploymentName",
+    "textEmbedding3LargeDeploymentName",
+)
 _PLATFORM_OUTPUT_NAMES = (
     "containerRegistryName",
     "containerRegistryLoginServer",
@@ -25,6 +35,24 @@ _PLATFORM_OUTPUT_NAMES = (
     "platformKeyVaultName",
     "platformKeyVaultUri",
 )
+_RUNTIME_OUTPUT_NAMES = (
+    "runtimeKeyVaultResourceId",
+    "runtimeKeyVaultName",
+    "runtimeKeyVaultUri",
+    "identityClientId",
+    "identityPrincipalId",
+    "documentParserIdentityClientId",
+    "documentParserIdentityPrincipalId",
+    "mailboxSyncIdentityClientId",
+    "mailboxSyncIdentityPrincipalId",
+    "sdbIdentityClientId",
+    "sdbIdentityPrincipalId",
+    "documentParserFunctionAppHostname",
+    "mailboxSyncFunctionAppHostname",
+    "sdbFunctionAppHostname",
+    "functionHostStorageAccountName",
+)
+_REQUIRED_RUNTIME_OUTPUT_NAMES = _RUNTIME_OUTPUT_NAMES[:11]
 _REQUIRED_PLATFORM_OUTPUT_NAMES = (
     "containerRegistryName",
     "containerRegistryLoginServer",
@@ -47,6 +75,14 @@ class FoundationOutputs:
     customer_key_vault_uri: str
     search_endpoint: str
     ai_endpoint: str
+    storage_account_name: str = ""
+    blob_endpoint: str = ""
+    search_service_name: str = ""
+    document_intelligence_endpoint: str = ""
+    gpt5_deployment_name: str = ""
+    gpt54_deployment_name: str = ""
+    gpt5_mini_deployment_name: str = ""
+    text_embedding3_large_deployment_name: str = ""
 
     def to_safe_dict(self) -> dict[str, str]:
         return {
@@ -59,7 +95,24 @@ class FoundationOutputs:
             "customerKeyVaultUri": self.customer_key_vault_uri,
             "searchEndpoint": self.search_endpoint,
             "aiEndpoint": self.ai_endpoint,
+            "storageAccountName": self.storage_account_name,
+            "blobEndpoint": self.blob_endpoint,
+            "searchServiceName": self.search_service_name,
+            "documentIntelligenceEndpoint": self.document_intelligence_endpoint,
+            "gpt5DeploymentName": self.gpt5_deployment_name,
+            "gpt54DeploymentName": self.gpt54_deployment_name,
+            "gpt5MiniDeploymentName": self.gpt5_mini_deployment_name,
+            "textEmbedding3LargeDeploymentName": self.text_embedding3_large_deployment_name,
         }
+
+
+def _optional_output_value(raw_outputs: dict[str, object], name: str) -> str:
+    output = raw_outputs.get(name)
+    if output is None:
+        return ""
+    if not isinstance(output, dict) or not isinstance(output.get("value"), str):
+        raise ValueError(f"foundation output {name} must contain a string value")
+    return output["value"]
 
 
 def extract_foundation_outputs(raw_outputs: dict[str, object]) -> FoundationOutputs:
@@ -81,6 +134,18 @@ def extract_foundation_outputs(raw_outputs: dict[str, object]) -> FoundationOutp
         customer_key_vault_uri=values["customerKeyVaultUri"],
         search_endpoint=values["searchEndpoint"],
         ai_endpoint=values["aiEndpoint"],
+        storage_account_name=_optional_output_value(raw_outputs, "storageAccountName"),
+        blob_endpoint=_optional_output_value(raw_outputs, "blobEndpoint"),
+        search_service_name=_optional_output_value(raw_outputs, "searchServiceName"),
+        document_intelligence_endpoint=_optional_output_value(
+            raw_outputs, "documentIntelligenceEndpoint"
+        ),
+        gpt5_deployment_name=_optional_output_value(raw_outputs, "gpt5DeploymentName"),
+        gpt54_deployment_name=_optional_output_value(raw_outputs, "gpt54DeploymentName"),
+        gpt5_mini_deployment_name=_optional_output_value(raw_outputs, "gpt5MiniDeploymentName"),
+        text_embedding3_large_deployment_name=_optional_output_value(
+            raw_outputs, "textEmbedding3LargeDeploymentName"
+        ),
     )
 
 
@@ -130,6 +195,82 @@ def extract_platform_outputs(raw_outputs: dict[str, object]) -> PlatformOutputs:
         platform_key_vault_resource_id=values["platformKeyVaultResourceId"],
         platform_key_vault_name=values["platformKeyVaultName"],
         platform_key_vault_uri=values["platformKeyVaultUri"],
+    )
+
+
+@dataclass(frozen=True)
+class RuntimeOutputs:
+    runtime_key_vault_resource_id: str
+    runtime_key_vault_name: str
+    runtime_key_vault_uri: str
+    identity_client_id: str
+    identity_principal_id: str
+    document_parser_identity_client_id: str
+    document_parser_identity_principal_id: str
+    mailbox_sync_identity_client_id: str
+    mailbox_sync_identity_principal_id: str
+    sdb_identity_client_id: str
+    sdb_identity_principal_id: str
+    document_parser_function_app_hostname: str
+    mailbox_sync_function_app_hostname: str
+    sdb_function_app_hostname: str
+    function_host_storage_account_name: str
+
+    def to_safe_dict(self) -> dict[str, str]:
+        return {
+            "runtimeKeyVaultResourceId": self.runtime_key_vault_resource_id,
+            "runtimeKeyVaultName": self.runtime_key_vault_name,
+            "runtimeKeyVaultUri": self.runtime_key_vault_uri,
+            "identityClientId": self.identity_client_id,
+            "identityPrincipalId": self.identity_principal_id,
+            "documentParserIdentityClientId": self.document_parser_identity_client_id,
+            "documentParserIdentityPrincipalId": self.document_parser_identity_principal_id,
+            "mailboxSyncIdentityClientId": self.mailbox_sync_identity_client_id,
+            "mailboxSyncIdentityPrincipalId": self.mailbox_sync_identity_principal_id,
+            "sdbIdentityClientId": self.sdb_identity_client_id,
+            "sdbIdentityPrincipalId": self.sdb_identity_principal_id,
+            "documentParserFunctionAppHostname": self.document_parser_function_app_hostname,
+            "mailboxSyncFunctionAppHostname": self.mailbox_sync_function_app_hostname,
+            "sdbFunctionAppHostname": self.sdb_function_app_hostname,
+            "functionHostStorageAccountName": self.function_host_storage_account_name,
+        }
+
+
+def extract_runtime_outputs(raw_outputs: dict[str, object]) -> RuntimeOutputs:
+    if not isinstance(raw_outputs, dict):
+        raise ValueError("deployment outputs must be an object")
+    values: dict[str, str] = {}
+    for name in _REQUIRED_RUNTIME_OUTPUT_NAMES:
+        output = raw_outputs.get(name)
+        if not isinstance(output, dict) or not isinstance(output.get("value"), str):
+            raise ValueError(f"runtime output {name} must contain a string value")
+        if not output["value"]:
+            raise ValueError(f"runtime output {name} must not be empty")
+        values[name] = output["value"]
+    for name in _RUNTIME_OUTPUT_NAMES[len(_REQUIRED_RUNTIME_OUTPUT_NAMES):]:
+        output = raw_outputs.get(name)
+        if output is None:
+            values[name] = ""
+        elif not isinstance(output, dict) or not isinstance(output.get("value"), str):
+            raise ValueError(f"runtime output {name} must contain a string value")
+        else:
+            values[name] = output["value"]
+    return RuntimeOutputs(
+        runtime_key_vault_resource_id=values["runtimeKeyVaultResourceId"],
+        runtime_key_vault_name=values["runtimeKeyVaultName"],
+        runtime_key_vault_uri=values["runtimeKeyVaultUri"],
+        identity_client_id=values["identityClientId"],
+        identity_principal_id=values["identityPrincipalId"],
+        document_parser_identity_client_id=values["documentParserIdentityClientId"],
+        document_parser_identity_principal_id=values["documentParserIdentityPrincipalId"],
+        mailbox_sync_identity_client_id=values["mailboxSyncIdentityClientId"],
+        mailbox_sync_identity_principal_id=values["mailboxSyncIdentityPrincipalId"],
+        sdb_identity_client_id=values["sdbIdentityClientId"],
+        sdb_identity_principal_id=values["sdbIdentityPrincipalId"],
+        document_parser_function_app_hostname=values["documentParserFunctionAppHostname"],
+        mailbox_sync_function_app_hostname=values["mailboxSyncFunctionAppHostname"],
+        sdb_function_app_hostname=values["sdbFunctionAppHostname"],
+        function_host_storage_account_name=values["functionHostStorageAccountName"],
     )
 
 

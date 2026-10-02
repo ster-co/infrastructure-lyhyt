@@ -83,6 +83,7 @@
             "publicNetworkAccess": "Enabled",
             "zoneRedundant": false,
             "functionHostStorageNetworkDefaultAction": "Allow",
+            "runtimeKeyVaultNetworkDefaultAction": "Deny",
             "functionRuntimeConfiguration": {
               "documentParser": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"},
               "mailboxSync": {"workerRuntime": "python", "workerRuntimeVersion": "3.11"},
@@ -91,7 +92,7 @@
             "enableDoclingResources": false,
             "containerImage": "replacewithacrname.azurecr.io/pilot/your-image@sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "keyVaultConfiguration": {
-              "enabled": false,
+              "enabled": true,
               "requireKeyVault": false
             },
             "enablePlatformKeyVaultRoleAssignment": false,

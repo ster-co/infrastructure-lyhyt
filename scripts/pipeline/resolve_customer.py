@@ -35,6 +35,7 @@ REQUIRED_RUNTIME_PARAMETERS = frozenset({
     "publicNetworkAccess",
     "zoneRedundant",
     "functionHostStorageNetworkDefaultAction",
+    "runtimeKeyVaultNetworkDefaultAction",
     "functionRuntimeConfiguration",
     "enableDoclingResources",
     "containerImage",

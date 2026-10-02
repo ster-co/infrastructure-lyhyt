@@ -88,9 +88,10 @@ jobs:
           runtime = resolved["runtimeParameters"]
           foundation = resolved["foundationParameters"]
           key_vault = runtime["keyVaultConfiguration"]
-          needs_bootstrap = bool(key_vault["enabled"] or foundation.get(
-              "enableSameTenantRuntimeKeyVaultRoleAssignment", False
-          ))
+          # The runtime vault and its workload identities are prerequisites for
+          # every runtime deployment. The bootstrap job is safe to rerun because
+          # it preserves active application Key Vault settings when present.
+          needs_bootstrap = True
           values = {
               "release_version": resolved["releaseVersion"],
               "customer_tenant_id": resolved["customerTenantId"],
@@ -105,9 +106,7 @@ jobs:
               "lyhyt_runtime_subscription_id": resolved["automation"]["lyhytRuntimeSubscriptionId"],
               "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
               "needs_runtime_bootstrap": str(needs_bootstrap).lower(),
-              "same_tenant_rbac_enabled": str(bool(
-                  foundation.get("enableSameTenantRuntimeKeyVaultRoleAssignment", False)
-              )).lower(),
+              "same_tenant_rbac_enabled": "false",
               "runtime_key_vault_enabled": str(key_vault["enabled"]).lower(),
           }
           with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
@@ -192,6 +191,18 @@ jobs:
     outputs:
       identity_principal_id: ${{ steps.bootstrap.outputs.identity_principal_id }}
       identity_client_id: ${{ steps.bootstrap.outputs.identity_client_id }}
+      runtime_key_vault_resource_id: ${{ steps.bootstrap.outputs.runtime_key_vault_resource_id }}
+      runtime_key_vault_name: ${{ steps.bootstrap.outputs.runtime_key_vault_name }}
+      runtime_key_vault_uri: ${{ steps.bootstrap.outputs.runtime_key_vault_uri }}
+      document_parser_identity_principal_id: ${{ steps.bootstrap.outputs.document_parser_identity_principal_id }}
+      mailbox_sync_identity_principal_id: ${{ steps.bootstrap.outputs.mailbox_sync_identity_principal_id }}
+      sdb_identity_principal_id: ${{ steps.bootstrap.outputs.sdb_identity_principal_id }}
+      document_parser_function_app_hostname: ${{ steps.bootstrap.outputs.document_parser_function_app_hostname }}
+      mailbox_sync_function_app_hostname: ${{ steps.bootstrap.outputs.mailbox_sync_function_app_hostname }}
+      sdb_function_app_hostname: ${{ steps.bootstrap.outputs.sdb_function_app_hostname }}
+      function_host_storage_account_name: ${{ steps.bootstrap.outputs.function_host_storage_account_name }}
+      publisher_principal_id: ${{ steps.bootstrap.outputs.publisher_principal_id }}
+      require_key_vault: ${{ steps.bootstrap.outputs.require_key_vault }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -203,7 +214,7 @@ jobs:
           tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
 
-      - name: Bootstrap runtime identity without Key Vault integration
+      - name: Bootstrap runtime Key Vault and workload identities
         id: bootstrap
         env:
           CUSTOMER_ID: ${{ inputs.customer_id }}
@@ -217,6 +228,9 @@ jobs:
           CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
           CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+          REGION_CODE: ${{ needs.resolve.outputs.region_code }}
+          LYHYT_AZURE_CLIENT_ID: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -229,6 +243,20 @@ jobs:
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
             --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+          RUNTIME_RESOURCE_GROUP="rg-lyhyt-${CUSTOMER_ID}-${DEPLOYMENT_ENVIRONMENT}-${REGION_CODE}"
+          RUNTIME_CONTAINER_APP="ca-lyhyt-${CUSTOMER_ID}-api-${DEPLOYMENT_ENVIRONMENT}"
+          CURRENT_RUNTIME_KEY_VAULT_URI="$(az containerapp show \
+            --name "$RUNTIME_CONTAINER_APP" \
+            --resource-group "$RUNTIME_RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?name=='CLIENT_KEY_VAULT_URI'].value | [0]" \
+            --output tsv 2>/dev/null || true)"
+          CURRENT_REQUIRE_KEY_VAULT="$(az containerapp show \
+            --name "$RUNTIME_CONTAINER_APP" \
+            --resource-group "$RUNTIME_RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?name=='REQUIRE_KEY_VAULT'].value | [0]" \
+            --output tsv 2>/dev/null || true)"
+          PUBLISHER_PRINCIPAL_ID="$(az ad sp show --id "$LYHYT_AZURE_CLIENT_ID" --query id --output tsv)"
+          export CURRENT_RUNTIME_KEY_VAULT_URI CURRENT_REQUIRE_KEY_VAULT PUBLISHER_PRINCIPAL_ID
           python3 - "$RESOLVED_FILE" <<'PY'
           import json
           import os
@@ -268,13 +296,18 @@ jobs:
               "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
           }
           key_vault = dict(parameters["keyVaultConfiguration"])
+          current_uri = os.environ.get("CURRENT_RUNTIME_KEY_VAULT_URI", "").strip()
+          current_require = os.environ.get("CURRENT_REQUIRE_KEY_VAULT", "").strip().lower()
           key_vault["customerKeyVaultResourceId"] = ""
           key_vault["customerKeyVaultUri"] = ""
+          key_vault["runtimeKeyVaultResourceId"] = ""
+          key_vault["runtimeKeyVaultUri"] = current_uri
           key_vault["platformKeyVaultResourceId"] = os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]
           key_vault["platformKeyVaultUri"] = os.environ["PLATFORM_KEY_VAULT_URI"]
-          key_vault["enabled"] = False
-          key_vault["requireKeyVault"] = False
+          key_vault["enabled"] = bool(current_uri)
+          key_vault["requireKeyVault"] = current_require == "true" if current_uri else False
           parameters["keyVaultConfiguration"] = key_vault
+          parameters["runtimePublisherPrincipalId"] = os.environ["PUBLISHER_PRINCIPAL_ID"]
           parameters["enablePlatformKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
@@ -284,24 +317,54 @@ jobs:
           az deployment sub create --parameters "$PARAM_FILE" \
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$RUNTIME_TEMPLATE" \
-            --query 'properties.outputs.{identityPrincipalId:identityPrincipalId.value,identityClientId:identityClientId.value}' \
+            --query 'properties.outputs' \
             --output json > "$BOOTSTRAP_OUTPUT_FILE"
-          python3 - "$BOOTSTRAP_OUTPUT_FILE" "$GITHUB_OUTPUT" <<'PY'
+          python3 - "$BOOTSTRAP_OUTPUT_FILE" "$GITHUB_OUTPUT" "$LYHYT_RUNTIME_SUBSCRIPTION_ID" "$PUBLISHER_PRINCIPAL_ID" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
-          values = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          for key in ("identityPrincipalId", "identityClientId"):
-              value = values.get(key)
-              if not isinstance(value, str) or not value:
-                  raise SystemExit("runtime bootstrap did not return the required identity output")
-              output_name = {
-                  "identityPrincipalId": "identity_principal_id",
-                  "identityClientId": "identity_client_id",
-              }[key]
-              with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
-                  output.write(f"{output_name}={value}\n")
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              values = extract_runtime_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              ).to_safe_dict()
+              validate_resource_id_subscription(
+                  values["runtimeKeyVaultResourceId"],
+                  sys.argv[3],
+                  "Microsoft.KeyVault",
+              )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("runtime bootstrap returned invalid safe outputs") from None
+
+          output_names = {
+              "runtimeKeyVaultResourceId": "runtime_key_vault_resource_id",
+              "runtimeKeyVaultName": "runtime_key_vault_name",
+              "runtimeKeyVaultUri": "runtime_key_vault_uri",
+              "identityClientId": "identity_client_id",
+              "identityPrincipalId": "identity_principal_id",
+              "documentParserIdentityPrincipalId": "document_parser_identity_principal_id",
+              "mailboxSyncIdentityPrincipalId": "mailbox_sync_identity_principal_id",
+              "sdbIdentityPrincipalId": "sdb_identity_principal_id",
+              "documentParserFunctionAppHostname": "document_parser_function_app_hostname",
+              "mailboxSyncFunctionAppHostname": "mailbox_sync_function_app_hostname",
+              "sdbFunctionAppHostname": "sdb_function_app_hostname",
+              "functionHostStorageAccountName": "function_host_storage_account_name",
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for source_name, output_name in output_names.items():
+                  output.write(f"{output_name}={values[source_name]}\n")
+              output.write(f"publisher_principal_id={sys.argv[4]}\n")
+              output.write(
+                  "require_key_vault="
+                  + ("true" if os.environ.get("CURRENT_REQUIRE_KEY_VAULT", "").strip().lower() == "true" else "false")
+                  + "\n"
+              )
           PY
 
   customer_foundation_what_if:
@@ -383,6 +446,13 @@ jobs:
       sqlDatabaseResourceId: ${{ steps.apply.outputs.sqlDatabaseResourceId }}
       customerKeyVaultResourceId: ${{ steps.apply.outputs.customerKeyVaultResourceId }}
       customerKeyVaultUri: ${{ steps.apply.outputs.customerKeyVaultUri }}
+      searchEndpoint: ${{ steps.apply.outputs.searchEndpoint }}
+      aiEndpoint: ${{ steps.apply.outputs.aiEndpoint }}
+      documentIntelligenceEndpoint: ${{ steps.apply.outputs.documentIntelligenceEndpoint }}
+      gpt5DeploymentName: ${{ steps.apply.outputs.gpt5DeploymentName }}
+      gpt54DeploymentName: ${{ steps.apply.outputs.gpt54DeploymentName }}
+      gpt5MiniDeploymentName: ${{ steps.apply.outputs.gpt5MiniDeploymentName }}
+      textEmbedding3LargeDeploymentName: ${{ steps.apply.outputs.textEmbedding3LargeDeploymentName }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -479,16 +549,78 @@ jobs:
                   output.write(f"{name}={value}\n")
           PY
 
-      - name: Publish safe customer resource configuration
+  runtime_configuration_publish:
+    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_runtime_bootstrap.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to LYHYT tenant for runtime Key Vault publication
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+
+      - name: Publish complete runtime configuration
         env:
-          CUSTOMER_KEY_VAULT_NAME: ${{ steps.apply.outputs.customerKeyVaultName }}
-          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
+          CUSTOMER_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          RUNTIME_KEY_VAULT_NAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_name }}
+          FOUNDATION_SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          FOUNDATION_SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          FOUNDATION_AI_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.aiEndpoint }}
+          FOUNDATION_SEARCH_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.searchEndpoint }}
+          FOUNDATION_DOCUMENT_INTELLIGENCE_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.documentIntelligenceEndpoint }}
+          FOUNDATION_GPT5_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt5DeploymentName }}
+          FOUNDATION_GPT54_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt54DeploymentName }}
+          FOUNDATION_GPT5_MINI_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt5MiniDeploymentName }}
+          FOUNDATION_EMBEDDING_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.textEmbedding3LargeDeploymentName }}
+          RUNTIME_DOCUMENT_PARSER_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.document_parser_function_app_hostname }}
+          RUNTIME_MAILBOX_SYNC_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.mailbox_sync_function_app_hostname }}
+          RUNTIME_SDB_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.sdb_function_app_hostname }}
+          RUNTIME_STORAGE_ACCOUNT_NAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.function_host_storage_account_name }}
+          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/runtime-foundation-outputs.json
+          RUNTIME_OUTPUTS_FILE: ${{ runner.temp }}/runtime-outputs.json
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/pipeline/publish_customer_configuration.py \
-            --outputs "$FOUNDATION_OUTPUTS_FILE" \
-            --vault-name "$CUSTOMER_KEY_VAULT_NAME"
+          trap 'rm -f "$FOUNDATION_OUTPUTS_FILE" "$RUNTIME_OUTPUTS_FILE"' EXIT
+          python3 - "$FOUNDATION_OUTPUTS_FILE" "$RUNTIME_OUTPUTS_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          def output(name):
+              return {"value": os.environ.get(name, "")}
+
+          foundation = {
+              "sqlServerFqdn": output("FOUNDATION_SQL_SERVER_FQDN"),
+              "sqlDatabaseName": output("FOUNDATION_SQL_DATABASE_NAME"),
+              "aiEndpoint": output("FOUNDATION_AI_ENDPOINT"),
+              "searchEndpoint": output("FOUNDATION_SEARCH_ENDPOINT"),
+              "documentIntelligenceEndpoint": output("FOUNDATION_DOCUMENT_INTELLIGENCE_ENDPOINT"),
+              "gpt5DeploymentName": output("FOUNDATION_GPT5_DEPLOYMENT_NAME"),
+              "gpt54DeploymentName": output("FOUNDATION_GPT54_DEPLOYMENT_NAME"),
+              "gpt5MiniDeploymentName": output("FOUNDATION_GPT5_MINI_DEPLOYMENT_NAME"),
+              "textEmbedding3LargeDeploymentName": output("FOUNDATION_EMBEDDING_DEPLOYMENT_NAME"),
+          }
+          runtime = {
+              "documentParserFunctionAppHostname": output("RUNTIME_DOCUMENT_PARSER_HOSTNAME"),
+              "mailboxSyncFunctionAppHostname": output("RUNTIME_MAILBOX_SYNC_HOSTNAME"),
+              "sdbFunctionAppHostname": output("RUNTIME_SDB_HOSTNAME"),
+              "functionHostStorageAccountName": output("RUNTIME_STORAGE_ACCOUNT_NAME"),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(foundation), encoding="utf-8")
+          Path(sys.argv[2]).write_text(json.dumps(runtime), encoding="utf-8")
+          PY
+          python3 scripts/pipeline/publish_runtime_configuration.py \
+            --foundation-outputs "$FOUNDATION_OUTPUTS_FILE" \
+            --runtime-outputs "$RUNTIME_OUTPUTS_FILE" \
+            --customer-tenant-id "$CUSTOMER_TENANT_ID" \
+            --vault-name "$RUNTIME_KEY_VAULT_NAME"
 
   sql_migration_preflight:
     needs: [resolve, customer_foundation_apply]
@@ -748,8 +880,8 @@ jobs:
             --output json
 
   lyhyt_runtime:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_apply, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_apply, runtime_configuration_publish, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.runtime_configuration_publish.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -768,9 +900,10 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
-          RUNTIME_KEY_VAULT_ENABLED: ${{ needs.resolve.outputs.runtime_key_vault_enabled }}
-          FOUNDATION_KEY_VAULT_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultResourceId }}
-          FOUNDATION_KEY_VAULT_URI: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultUri }}
+          RUNTIME_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_resource_id }}
+          RUNTIME_KEY_VAULT_URI: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_uri }}
+          REQUIRE_KEY_VAULT: ${{ needs.lyhyt_runtime_bootstrap.outputs.require_key_vault }}
+          RUNTIME_PUBLISHER_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.publisher_principal_id }}
           LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
           PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
           PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}
@@ -828,17 +961,17 @@ jobs:
               "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
           }
           key_vault = dict(parameters["keyVaultConfiguration"])
-          key_vault["customerKeyVaultResourceId"] = os.environ["FOUNDATION_KEY_VAULT_RESOURCE_ID"]
-          key_vault["customerKeyVaultUri"] = os.environ["FOUNDATION_KEY_VAULT_URI"]
-          key_vault["platformKeyVaultResourceId"] = os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]
-          key_vault["platformKeyVaultUri"] = os.environ["PLATFORM_KEY_VAULT_URI"]
-          if os.environ["RUNTIME_KEY_VAULT_ENABLED"] == "true":
-              key_vault["enabled"] = True
-          else:
-              key_vault["enabled"] = False
-              key_vault["requireKeyVault"] = False
-              parameters["enablePlatformKeyVaultRoleAssignment"] = False
+          key_vault["runtimeKeyVaultResourceId"] = os.environ["RUNTIME_KEY_VAULT_RESOURCE_ID"]
+          key_vault["runtimeKeyVaultUri"] = os.environ["RUNTIME_KEY_VAULT_URI"]
+          key_vault["customerKeyVaultResourceId"] = ""
+          key_vault["customerKeyVaultUri"] = ""
+          key_vault["platformKeyVaultResourceId"] = ""
+          key_vault["platformKeyVaultUri"] = ""
+          key_vault["enabled"] = True
+          key_vault["requireKeyVault"] = os.environ["REQUIRE_KEY_VAULT"] == "true"
           parameters["keyVaultConfiguration"] = key_vault
+          parameters["runtimePublisherPrincipalId"] = os.environ["RUNTIME_PUBLISHER_PRINCIPAL_ID"]
+          parameters["enablePlatformKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep lint --file "$RUNTIME_TEMPLATE"

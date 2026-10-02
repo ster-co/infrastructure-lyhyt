@@ -1,4 +1,4 @@
-"""Publish safe customer-resource configuration to the customer Key Vault."""
+"""Guard the retired customer-foundation runtime configuration publisher."""
 
 from __future__ import annotations
 
@@ -8,24 +8,9 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
 
 
-_OUTPUT_TO_SECRET = {
-    "storageAccountName": "storage-account-name",
-    "blobEndpoint": "storage-blob-endpoint",
-    "sqlServerFqdn": "db-server-name",
-    "sqlDatabaseName": "db-name",
-    "searchServiceName": "azure-search-service-name",
-    "searchEndpoint": "azure-search-service-endpoint",
-    "aiEndpoint": "azure-openai-endpoint",
-    "documentIntelligenceEndpoint": "document-intelligence-endpoint",
-    "gpt5DeploymentName": "azure-openai-deployment-gpt5",
-    "gpt54DeploymentName": "azure-openai-deployment-gpt54",
-    "gpt5MiniDeploymentName": "azure-openai-deployment-gpt5-mini",
-    "textEmbedding3LargeDeploymentName": "azure-openai-deployment-text-embedding-3-large",
-}
-_DEFAULT_CUSTOMER_SECRETS = {
-    "brave-search-api-key": "not-configured",
-}
-_ALLOWED_CUSTOMER_SECRETS = set(_OUTPUT_TO_SECRET.values()) | set(_DEFAULT_CUSTOMER_SECRETS)
+_OUTPUT_TO_SECRET: dict[str, str] = {}
+_DEFAULT_CUSTOMER_SECRETS: dict[str, str] = {}
+_ALLOWED_CUSTOMER_SECRETS: set[str] = set()
 _KEY_VAULT_NAME = re.compile(r"^[a-z0-9-]{3,24}$")
 
 
@@ -153,16 +138,11 @@ def _output_value(raw_outputs: dict[str, object], output_name: str) -> str:
 
 
 def extract_customer_configuration(raw_outputs: dict[str, object]) -> dict[str, str]:
-    """Map only safe, resource-derived foundation outputs to vault secret names."""
+    """Return no runtime values; runtime ownership moved to the LYHYT vault."""
 
     if not isinstance(raw_outputs, dict):
         raise ValueError("deployment outputs must be an object")
-    values = {
-        secret_name: _output_value(raw_outputs, output_name)
-        for output_name, secret_name in _OUTPUT_TO_SECRET.items()
-    }
-    values.update(_DEFAULT_CUSTOMER_SECRETS)
-    return values
+    return {}
 
 
 def publish_customer_configuration(

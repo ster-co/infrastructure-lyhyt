@@ -278,35 +278,36 @@ can log in with the catalog migration application client ID.
 
 ## Key Vault bootstrap sequence
 
-Key Vault integration is enabled only after the runtime identity and customer
-foundation exist. Follow this order:
+The LYHYT runtime owns one per-customer runtime Key Vault. Key Vault
+integration is enabled only after the vault and runtime identities exist.
+Follow this order:
 
-1. Deploy the shared platform and record its safe ACR and, when used, platform
-   Key Vault outputs.
-2. Deploy the customer runtime once in the LYHYT tenant with customer Key
-   Vault integration disabled. Capture only `identityPrincipalId` and
-   `identityClientId`; this creates the per-customer runtime UAMI.
-3. Deploy the customer foundation in the customer tenant. For the same-tenant
-   pilot only, pass the bootstrap UAMI principal ID and explicitly enable the
-   read-only customer Key Vault role assignment when required. A future
-   cross-tenant deployment must use the customer-side enterprise application
-   principal, not assume that the LYHYT UAMI can receive customer-tenant RBAC.
-4. Publish safe customer-resource configuration from the foundation apply
-   outputs into the customer Key Vault using the explicit allowlist and drift
-   guard. Never pass secret values through Bicep or workflow outputs.
-5. Read the customer and platform Key Vault IDs and URIs from their own
-   deployment outputs and pass those safe bootstrap values together to the
-   final runtime deployment. Do not pass customer endpoints as runtime tags or
-   application settings.
-6. Redeploy the runtime with Key Vault integration enabled and
-   `requireKeyVault=false`. Populate the documented allowlisted secrets later
-   through a secured secret-management workflow, restart the Container App,
-   and validate startup and application behavior.
-7. Set `requireKeyVault=true` only after validation. Keep it false in examples
-   and during bootstrap.
+1. Deploy the shared platform and record its safe ACR outputs.
+2. Bootstrap the customer runtime in the LYHYT tenant and runtime
+   subscription. This creates the runtime Key Vault and the Container App,
+   document-parser, mailbox-sync, and SDB identities. Capture only safe vault,
+   identity, and Function hostname outputs.
+3. Apply the customer foundation in the customer tenant. Do not grant LYHYT
+   identities customer-vault access; cross-tenant access must use the approved
+   customer enterprise-application and federation boundary.
+4. Publish all 49 runtime entries to the LYHYT runtime vault. Hydrate safe
+   SQL, AI, Search, deployment, tenant, and Function endpoint values from
+   outputs; create `not-configured` for every unavailable value. Never pass
+   secret values through Bicep, catalog JSON, deployment outputs, or logs.
+5. Redeploy or restart the runtime with the runtime vault URI through the
+   existing `CLIENT_KEY_VAULT_URI` and `PLATFORM_KEY_VAULT_URI` settings.
+   Keep `requireKeyVault=false` until application validation succeeds.
+6. Set `requireKeyVault=true` only after validation. Rotate operator-managed
+   values in the runtime vault and restart workloads when application startup
+   caching requires it.
+
+The current infrastructure uses Entra-only SQL authentication and creates no
+SQL password. `db-password` therefore remains `not-configured`; SDB SQL access
+is blocked until SDB supports Entra/managed-identity SQL authentication or the
+authentication design is explicitly changed.
 
 See [`docs/key-vault-contract.md`](../../key-vault-contract.md) for the full
-vault contract, allowlists, and RBAC boundaries.
+vault contract, exact names, hydration rules, and RBAC boundaries.
 
 ## Local verification
 

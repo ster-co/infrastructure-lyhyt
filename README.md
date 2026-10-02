@@ -6,7 +6,7 @@ Azure Bicep templates for the LYHYT shared platform, customer foundation, and cu
 
 - `infra/lyhyt-platform/` provisions the shared platform resource group, Azure Container Registry, and optional shared platform Key Vault.
 - `infra/customer-foundation/` provisions customer-scoped Storage, Key Vault, Azure SQL, AI Services, Document Intelligence, and AI model deployments.
-- `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Application Insights, Container Apps Environment, the customer Container App, three Flex Consumption Function Apps, one user-assigned identity and plan per Function App, shared identity-based host storage, dedicated Flex deployment containers, and workload queues/containers.
+- `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Application Insights, Container Apps Environment, exactly one LYHYT-owned runtime Key Vault, the customer Container App, three Flex Consumption Function Apps, one user-assigned identity and plan per Function App, shared identity-based host storage, dedicated Flex deployment containers, and workload queues/containers.
 - `reference/exports/` contains exported Azure reference templates for comparison only and is excluded from Git.
 
 Each entry point is subscription-scoped and has an example parameter file under its `environments/` directory.
@@ -29,7 +29,7 @@ The address space between the two subnets is intentionally reserved for future r
 
 The pilot uses direct same-tenant Managed Identity RBAC for LYHYT-owned resources such as ACR. Workload identity federation for cross-tenant access is deliberately not implemented yet.
 
-The runtime uses separate user-assigned managed identities for the three Function Apps and the Container App. Function Apps use dedicated Flex deployment containers authenticated by their own identities, while host storage remains a shared account with account-level RBAC; separate identities therefore do not isolate application queues or containers. The dual-Key-Vault configuration is application-level: Bicep passes only identity client IDs, vault URIs, host-storage settings, monitoring settings, and feature flags. Applications read secrets themselves through their approved Key Vault bootstrap. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the exact contract, secret-name mappings, storage boundary, RBAC rules, and deployment handoff.
+The runtime uses separate user-assigned managed identities for the three Function Apps and the Container App. Function Apps use dedicated Flex deployment containers authenticated by their own identities, while host storage remains a shared account with account-level RBAC; separate identities therefore do not isolate application queues or containers. Runtime configuration is application-level: Bicep passes only identity client IDs, the runtime vault URI through the existing vault settings, host-storage settings, monitoring settings, and feature flags. Applications read secrets themselves through their approved Key Vault bootstrap. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the exact 49-entry contract, hydration rules, storage boundary, RBAC rules, and deployment handoff.
 
 ## Prerequisites
 
@@ -61,7 +61,7 @@ git diff --check
 
 ## Deployment order
 
-Deploy the shared platform first, then run the runtime once with Key Vault integration disabled to create the per-customer UAMI. Use its safe identity outputs for the customer foundation access handoff, resolve the customer vault ID/URI, and redeploy the runtime with integration and applicable RBAC enabled. The optional platform vault may remain disabled. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Populate Key Vault secrets later through a secured workflow; keep `REQUIRE_KEY_VAULT=false` until application validation and restart the Container App after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
+Deploy the shared platform first, then bootstrap the LYHYT runtime to create its per-customer identities and exactly one runtime Key Vault. Apply the customer foundation, publish the complete runtime configuration from safe deployment outputs, and redeploy or restart the runtime with the runtime vault URI. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Keep `REQUIRE_KEY_VAULT=false` until application validation and restart workloads after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
 
 ### 1. Shared platform
 
@@ -156,14 +156,13 @@ The platform deployment must use a stable deployment name per environment
 and optional platform Key Vault outputs from that named deployment; it does not
 redeploy the shared platform for every customer.
 
-The safe Key Vault bootstrap is two-stage: deploy the LYHYT runtime once with
-Key Vault integration disabled to create its UAMI, then deploy the customer
-foundation and finally redeploy the runtime with the customer/platform vault
-IDs and URIs. Populate secrets later through a secured workflow, validate the
-application, and only then set `REQUIRE_KEY_VAULT=true`. For the same-tenant
-pilot, the customer foundation may grant the UAMI the read-only customer Key
-Vault role; cross-tenant production must use the customer-side enterprise
-application model. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md)
-and [`docs/database/migrations/README.md`](docs/database/migrations/README.md)
-for the detailed bootstrap, permissions, migration authoring, Stabu code
+The safe Key Vault bootstrap is two-stage: create the LYHYT runtime vault and
+identities, then apply the customer foundation, publish all runtime entries,
+and redeploy or restart the runtime with the runtime vault URI. Populate real
+operator-managed secrets later through a secured workflow, validate the
+application, and only then set `REQUIRE_KEY_VAULT=true`. The customer
+foundation vault remains customer-tenant-owned and receives no runtime-owned
+values. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) and
+[`docs/database/migrations/README.md`](docs/database/migrations/README.md) for
+the detailed bootstrap, permissions, migration authoring, Stabu code
 reference-data import, and operations runbooks.
