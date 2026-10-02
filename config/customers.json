@@ -3,7 +3,7 @@
     {
       "id": "pilot2",
       "enabled": true,
-      "tenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+      "tenantId": "dc5495f6-68fa-44ba-af3e-ae5e88cf1d7b",
       "migration": {
         "principalObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
         "applicationClientId": "8326570e-3332-46d2-90b4-632498b943ae"
