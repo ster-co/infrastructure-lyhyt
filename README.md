@@ -63,6 +63,33 @@ git diff --check
 
 The shared platform must already exist. The customer workflow reads its safe ACR and optional platform Key Vault outputs without redeploying it, applies the selected customer foundation first, runs the customer SQL gates, then bootstraps or discovers that customer's LYHYT runtime. It publishes the safe foundation and runtime outputs into the per-customer runtime Key Vault and performs the final runtime deployment with the vault URI. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Keep `REQUIRE_KEY_VAULT=false` until application validation and restart workloads after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
 
+### Standalone runtime deployment workflow
+
+The shared platform deployment must already exist before using the standalone
+runtime workflow. It reads the named `lyhyt-platform-<environment>` deployment
+outputs for the ACR reference and optional platform Key Vault; it does not
+redeploy the shared platform. In GitHub Actions, select the
+`.github/workflows/lyhyt-runtime.yml` workflow and manually provide:
+
+- `customer_id`: the enabled customer catalog identifier from
+  `config/customers.json`;
+- `environment`: the customer environment catalog key; and
+- a branch ref from which to run the workflow.
+
+The workflow logs in only to the LYHYT tenant and LYHYT platform/runtime
+subscriptions. It deploys only the LYHYT runtime resources and its single
+runtime Key Vault. It never deploys, queries, or authenticates to the customer
+foundation or customer tenant, and it does not run customer SQL migrations.
+The customer tenant ID is used only as a non-secret catalog value for the
+existing `sp-tenant-id` runtime entry; it is not used for Azure access.
+
+The standalone sequence is bootstrap, runtime-only Key Vault publication, and
+final runtime wiring. Because no customer-foundation outputs are available in
+this path, foundation-derived entries—including SQL, AI, Search, and model
+deployment values—remain `not-configured`. Runtime-derived endpoints and other
+safe values are published when available. The combined customer-foundation
+workflow remains the path for later safe SQL/AI/Search hydration.
+
 ### 1. Shared platform
 
 ```bash

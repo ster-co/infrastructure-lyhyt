@@ -1,0 +1,572 @@
+name: LYHYT runtime
+
+run-name: Deploy LYHYT runtime ${{ inputs.customer_id }}/${{ inputs.environment }} from ${{ github.ref_name }}
+
+concurrency:
+  group: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: Customer catalog identifier
+        required: true
+        type: string
+      environment:
+        description: Customer environment
+        required: true
+        type: string
+
+env:
+  CATALOG_PATH: config/customers.json
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      customer_tenant_id: ${{ steps.resolve.outputs.customer_tenant_id }}
+      location: ${{ steps.resolve.outputs.location }}
+      region_code: ${{ steps.resolve.outputs.region_code }}
+      lyhyt_azure_client_id: ${{ steps.resolve.outputs.lyhyt_azure_client_id }}
+      lyhyt_azure_tenant_id: ${{ steps.resolve.outputs.lyhyt_azure_tenant_id }}
+      lyhyt_platform_subscription_id: ${{ steps.resolve.outputs.lyhyt_platform_subscription_id }}
+      lyhyt_runtime_subscription_id: ${{ steps.resolve.outputs.lyhyt_runtime_subscription_id }}
+      require_key_vault: ${{ steps.resolve.outputs.require_key_vault }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Reject non-branch refs
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "branch" ]]; then
+            exit 0
+          fi
+          echo "This workflow may run only from a branch selected in GitHub Actions." >&2
+          exit 1
+
+      - name: Resolve runtime catalog configuration
+        id: resolve
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-customer.json"
+          python3 scripts/pipeline/resolve_runtime_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          automation = resolved["automation"]
+          key_vault = resolved["runtimeParameters"]["keyVaultConfiguration"]
+          values = {
+              "customer_tenant_id": resolved["customerTenantId"],
+              "location": resolved["location"],
+              "region_code": resolved["regionCode"],
+              "lyhyt_azure_client_id": automation["lyhytAzureClientId"],
+              "lyhyt_azure_tenant_id": automation["lyhytAzureTenantId"],
+              "lyhyt_platform_subscription_id": automation["lyhytPlatformSubscriptionId"],
+              "lyhyt_runtime_subscription_id": automation["lyhytRuntimeSubscriptionId"],
+              "require_key_vault": str(key_vault["requireKeyVault"]).lower(),
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+  lyhyt_platform:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      container_registry_resource_id: ${{ steps.platform.outputs.container_registry_resource_id }}
+      container_registry_login_server: ${{ steps.platform.outputs.container_registry_login_server }}
+      platform_key_vault_resource_id: ${{ steps.platform.outputs.platform_key_vault_resource_id }}
+      platform_key_vault_uri: ${{ steps.platform.outputs.platform_key_vault_uri }}
+    env:
+      PLATFORM_TEMPLATE: infra/lyhyt-platform/main.bicep
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in for shared platform discovery
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
+
+      - name: Read and validate shared platform outputs
+        id: platform
+        env:
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
+          PLATFORM_OUTPUTS_FILE: ${{ runner.temp }}/lyhyt-platform-outputs.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLATFORM_DEPLOYMENT_NAME=lyhyt-platform-${DEPLOYMENT_ENVIRONMENT}
+          az bicep lint --file "$PLATFORM_TEMPLATE"
+          az bicep build --file "$PLATFORM_TEMPLATE" --stdout > /dev/null
+          az deployment sub show \
+            --name "$PLATFORM_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_PLATFORM_SUBSCRIPTION_ID" \
+            --query properties.outputs \
+            --output json > "$PLATFORM_OUTPUTS_FILE"
+          python3 - "$PLATFORM_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$LYHYT_PLATFORM_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_platform_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              safe = extract_platform_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              ).to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["containerRegistryId"], sys.argv[3], "Microsoft.ContainerRegistry"
+              )
+              if safe["platformKeyVaultResourceId"]:
+                  validate_resource_id_subscription(
+                      safe["platformKeyVaultResourceId"],
+                      sys.argv[3],
+                      "Microsoft.KeyVault",
+                  )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("shared platform returned invalid safe outputs") from None
+
+          output_names = {
+              "containerRegistryId": "container_registry_resource_id",
+              "containerRegistryLoginServer": "container_registry_login_server",
+              "platformKeyVaultResourceId": "platform_key_vault_resource_id",
+              "platformKeyVaultUri": "platform_key_vault_uri",
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for source_name, output_name in output_names.items():
+                  output.write(f"{output_name}={safe[source_name]}\n")
+          PY
+
+  runtime_bootstrap:
+    needs: [resolve, lyhyt_platform]
+    runs-on: ubuntu-latest
+    outputs:
+      runtime_key_vault_resource_id: ${{ steps.bootstrap.outputs.runtime_key_vault_resource_id }}
+      runtime_key_vault_name: ${{ steps.bootstrap.outputs.runtime_key_vault_name }}
+      runtime_key_vault_uri: ${{ steps.bootstrap.outputs.runtime_key_vault_uri }}
+      publisher_principal_id: ${{ steps.bootstrap.outputs.publisher_principal_id }}
+      require_key_vault: ${{ steps.bootstrap.outputs.require_key_vault }}
+    env:
+      RUNTIME_TEMPLATE: infra/lyhyt-customer-runtime/main.bicep
+      LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+      RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
+      DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in for runtime bootstrap
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+
+      - name: Bootstrap runtime resources
+        id: bootstrap
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          REGION_CODE: ${{ needs.resolve.outputs.region_code }}
+          CONFIGURED_REQUIRE_KEY_VAULT: ${{ needs.resolve.outputs.require_key_vault }}
+          LYHYT_AZURE_CLIENT_ID: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
+          CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
+          BOOTSTRAP_OUTPUTS_FILE: ${{ runner.temp }}/lyhyt-runtime-bootstrap-outputs.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-bootstrap-XXXXXX.bicepparam")"
+          RUNTIME_DEPLOYMENT_OUTPUTS_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-existing-XXXXXX.json")"
+          RUNTIME_DEPLOYMENT_ERROR_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-existing-XXXXXX.err")"
+          trap 'rm -f "$PARAM_FILE" "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE" "$RUNTIME_DEPLOYMENT_ERROR_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-bootstrap.json"
+          python3 scripts/pipeline/resolve_runtime_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
+
+          RUNTIME_RESOURCE_GROUP="rg-lyhyt-${CUSTOMER_ID}-${DEPLOYMENT_ENVIRONMENT}-${REGION_CODE}"
+          RUNTIME_CONTAINER_APP="ca-lyhyt-${CUSTOMER_ID}-api-${DEPLOYMENT_ENVIRONMENT}"
+          RUNTIME_DEPLOYMENT_STATUS=0
+          az deployment sub show \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+            --query properties.outputs \
+            --output json > "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE" \
+            2> "$RUNTIME_DEPLOYMENT_ERROR_FILE" || RUNTIME_DEPLOYMENT_STATUS=$?
+          if (( RUNTIME_DEPLOYMENT_STATUS != 0 )); then
+            if grep -Eiq 'DeploymentNotFound|ResourceNotFound|ResourceGroupNotFound|could[[:space:]]+not[[:space:]]+be[[:space:]]+found|not[[:space:]]+found' "$RUNTIME_DEPLOYMENT_ERROR_FILE"; then
+              : > "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE"
+            else
+              echo "Unable to read the named runtime deployment outputs; refusing to trust an existing runtime vault URI." >&2
+              exit "$RUNTIME_DEPLOYMENT_STATUS"
+            fi
+          fi
+          rm -f "$RUNTIME_DEPLOYMENT_ERROR_FILE"
+
+          read_existing_container_app_env() {
+            local query="$1"
+            local error_file
+            local value
+            local status=0
+
+            error_file="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-containerapp-read-XXXXXX.err")"
+            value="$(az containerapp show \
+              --name "$RUNTIME_CONTAINER_APP" \
+              --resource-group "$RUNTIME_RESOURCE_GROUP" \
+              --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+              --query "$query" \
+              --output tsv 2>"$error_file")" || status=$?
+            if (( status == 0 )); then
+              rm -f "$error_file"
+              printf '%s' "$value"
+              return 0
+            fi
+            if grep -Eiq 'ResourceGroupNotFound|ResourceNotFound|could[[:space:]]+not[[:space:]]+be[[:space:]]+found|not[[:space:]]+found' "$error_file"; then
+              rm -f "$error_file"
+              return 0
+            fi
+            rm -f "$error_file"
+            echo "Unable to read an existing Container App setting; refusing to clear active runtime settings." >&2
+            return "$status"
+          }
+          CURRENT_RUNTIME_KEY_VAULT_URI="$(read_existing_container_app_env \
+            "properties.template.containers[0].env[?name=='CLIENT_KEY_VAULT_URI'].value | [0]")"
+          CURRENT_REQUIRE_KEY_VAULT="$(read_existing_container_app_env \
+            "properties.template.containers[0].env[?name=='REQUIRE_KEY_VAULT'].value | [0]")"
+          CURRENT_REQUIRE_KEY_VAULT="${CURRENT_REQUIRE_KEY_VAULT,,}"
+          if [[ "$CURRENT_REQUIRE_KEY_VAULT" == "true" || "$CURRENT_REQUIRE_KEY_VAULT" == "false" ]]; then
+            EFFECTIVE_REQUIRE_KEY_VAULT="$CURRENT_REQUIRE_KEY_VAULT"
+          else
+            EFFECTIVE_REQUIRE_KEY_VAULT="$CONFIGURED_REQUIRE_KEY_VAULT"
+          fi
+          PUBLISHER_PRINCIPAL_ID="$(az ad sp show \
+            --id "$LYHYT_AZURE_CLIENT_ID" \
+            --query id \
+            --output tsv)"
+          TRUSTED_RUNTIME_KEY_VAULT_URI="$(python3 - "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE" "$CURRENT_RUNTIME_KEY_VAULT_URI" "$LYHYT_RUNTIME_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+
+          current_uri = sys.argv[2].strip()
+          if not current_uri:
+              print("")
+              raise SystemExit(0)
+
+          try:
+              raw_outputs = Path(sys.argv[1]).read_text(encoding="utf-8")
+              if not raw_outputs.strip():
+                  raise ValueError("existing runtime URI has no trusted deployment outputs")
+              safe = extract_runtime_outputs(json.loads(raw_outputs)).to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["runtimeKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
+              )
+              resource_name = safe["runtimeKeyVaultResourceId"].rstrip("/").split("/")[-1]
+              vault_name = safe["runtimeKeyVaultName"]
+              trusted_uri = safe["runtimeKeyVaultUri"].rstrip("/") + "/"
+              if resource_name.casefold() != vault_name.casefold():
+                  raise ValueError("runtime vault output names do not match")
+              if trusted_uri.casefold() != f"https://{vault_name}.vault.azure.net/".casefold():
+                  raise ValueError("runtime vault URI does not match its name")
+              if current_uri.rstrip("/").casefold() != trusted_uri.rstrip("/").casefold():
+                  raise ValueError("existing runtime URI does not match the named runtime vault")
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("existing runtime URI is not the named LYHYT runtime vault") from None
+
+          print(trusted_uri)
+          PY
+          )"
+          export CURRENT_RUNTIME_KEY_VAULT_URI TRUSTED_RUNTIME_KEY_VAULT_URI EFFECTIVE_REQUIRE_KEY_VAULT PUBLISHER_PRINCIPAL_ID
+
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["runtimeParameters"])
+          parameters["containerRegistryReference"] = {
+              "resourceId": os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
+              "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
+          }
+          key_vault = dict(parameters["keyVaultConfiguration"])
+          trusted_uri = os.environ["TRUSTED_RUNTIME_KEY_VAULT_URI"].strip()
+          key_vault.update({
+              "customerKeyVaultResourceId": "",
+              "customerKeyVaultUri": "",
+              "runtimeKeyVaultResourceId": "",
+              "runtimeKeyVaultUri": trusted_uri,
+              "platformKeyVaultResourceId": "",
+              "platformKeyVaultUri": "",
+              "enabled": bool(trusted_uri),
+              "requireKeyVault": os.environ["EFFECTIVE_REQUIRE_KEY_VAULT"] == "true",
+          })
+          parameters["keyVaultConfiguration"] = key_vault
+          parameters["runtimePublisherPrincipalId"] = os.environ["PUBLISHER_PRINCIPAL_ID"]
+          parameters["enablePlatformKeyVaultRoleAssignment"] = False
+          runtime_template = str(
+              (Path.cwd() / os.environ["RUNTIME_TEMPLATE"]).resolve()
+          )
+          render_bicepparam(
+              Path(sys.argv[2]), runtime_template, parameters
+          )
+          PY
+
+          az bicep lint --file "$RUNTIME_TEMPLATE"
+          az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$RUNTIME_TEMPLATE" \
+            --parameters "$PARAM_FILE" \
+            --query properties.outputs \
+            --output json > "$BOOTSTRAP_OUTPUTS_FILE"
+
+          python3 - "$BOOTSTRAP_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$LYHYT_RUNTIME_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              safe = extract_runtime_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              ).to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["runtimeKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
+              )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("runtime bootstrap returned invalid safe outputs") from None
+
+          output_names = {
+              "runtimeKeyVaultResourceId": "runtime_key_vault_resource_id",
+              "runtimeKeyVaultName": "runtime_key_vault_name",
+              "runtimeKeyVaultUri": "runtime_key_vault_uri",
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for source_name, output_name in output_names.items():
+                  output.write(f"{output_name}={safe[source_name]}\n")
+              output.write(f"publisher_principal_id={os.environ['PUBLISHER_PRINCIPAL_ID']}\n")
+              output.write(f"require_key_vault={os.environ['EFFECTIVE_REQUIRE_KEY_VAULT']}\n")
+          PY
+
+  runtime_configuration_publish:
+    needs: [resolve, runtime_bootstrap]
+    runs-on: ubuntu-latest
+    env:
+      LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+      RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in for runtime configuration publication
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+
+      - name: Publish runtime configuration
+        env:
+          CUSTOMER_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNTIME_OUTPUTS_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-publish-XXXXXX.json")"
+          trap 'rm -f "$RUNTIME_OUTPUTS_FILE"' EXIT
+          az deployment sub show \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+            --query properties.outputs \
+            --output json > "$RUNTIME_OUTPUTS_FILE"
+          RUNTIME_KEY_VAULT_NAME="$(python3 - "$RUNTIME_OUTPUTS_FILE" "$LYHYT_RUNTIME_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              safe = extract_runtime_outputs(
+                  json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              ).to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["runtimeKeyVaultResourceId"], sys.argv[2], "Microsoft.KeyVault"
+              )
+              resource_name = safe["runtimeKeyVaultResourceId"].rstrip("/").split("/")[-1]
+              vault_name = safe["runtimeKeyVaultName"]
+              vault_uri = safe["runtimeKeyVaultUri"].rstrip("/") + "/"
+              if resource_name.casefold() != vault_name.casefold():
+                  raise ValueError("runtime vault output names do not match")
+              if vault_uri.casefold() != f"https://{vault_name}.vault.azure.net/".casefold():
+                  raise ValueError("runtime vault URI does not match its name")
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("runtime deployment returned invalid vault outputs") from None
+          print(vault_name)
+          PY
+          )"
+          python3 scripts/pipeline/publish_runtime_configuration.py --runtime-only \
+            --runtime-outputs "$RUNTIME_OUTPUTS_FILE" \
+            --customer-tenant-id "$CUSTOMER_TENANT_ID" \
+            --vault-name "$RUNTIME_KEY_VAULT_NAME"
+
+  lyhyt_runtime:
+    needs: [resolve, lyhyt_platform, runtime_bootstrap, runtime_configuration_publish]
+    runs-on: ubuntu-latest
+    env:
+      RUNTIME_TEMPLATE: infra/lyhyt-customer-runtime/main.bicep
+      LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+      RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
+      DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in for final runtime wiring
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+
+      - name: Wire both application vault settings to the runtime vault
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
+          CONTAINER_REGISTRY_LOGIN_SERVER: ${{ needs.lyhyt_platform.outputs.container_registry_login_server }}
+          RUNTIME_PUBLISHER_PRINCIPAL_ID: ${{ needs.runtime_bootstrap.outputs.publisher_principal_id }}
+          REQUIRE_KEY_VAULT: ${{ needs.runtime_bootstrap.outputs.require_key_vault }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-final-XXXXXX.bicepparam")"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-final.json"
+          RUNTIME_OUTPUTS_FILE="${RUNNER_TEMP}/lyhyt-runtime-final-outputs.json"
+          python3 scripts/pipeline/resolve_runtime_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" > "$RESOLVED_FILE"
+          az deployment sub show \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+            --query properties.outputs \
+            --output json > "$RUNTIME_OUTPUTS_FILE"
+
+          python3 - "$RESOLVED_FILE" "$RUNTIME_OUTPUTS_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          try:
+              safe = extract_runtime_outputs(
+                  json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+              ).to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["runtimeKeyVaultResourceId"],
+                  os.environ["LYHYT_RUNTIME_SUBSCRIPTION_ID"],
+                  "Microsoft.KeyVault",
+              )
+              resource_name = safe["runtimeKeyVaultResourceId"].rstrip("/").split("/")[-1]
+              vault_name = safe["runtimeKeyVaultName"]
+              vault_uri = safe["runtimeKeyVaultUri"].rstrip("/") + "/"
+              if resource_name.casefold() != vault_name.casefold():
+                  raise ValueError("runtime vault output names do not match")
+              if vault_uri.casefold() != f"https://{vault_name}.vault.azure.net/".casefold():
+                  raise ValueError("runtime vault URI does not match its name")
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("runtime deployment returned invalid vault outputs") from None
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["runtimeParameters"])
+          parameters["containerRegistryReference"] = {
+              "resourceId": os.environ["CONTAINER_REGISTRY_RESOURCE_ID"],
+              "loginServer": os.environ["CONTAINER_REGISTRY_LOGIN_SERVER"],
+          }
+          key_vault = dict(parameters["keyVaultConfiguration"])
+          key_vault.update({
+              "customerKeyVaultResourceId": "",
+              "customerKeyVaultUri": "",
+              "runtimeKeyVaultResourceId": safe["runtimeKeyVaultResourceId"],
+              "runtimeKeyVaultUri": safe["runtimeKeyVaultUri"],
+              "platformKeyVaultResourceId": "",
+              "platformKeyVaultUri": "",
+              "enabled": True,
+              "requireKeyVault": os.environ["REQUIRE_KEY_VAULT"] == "true",
+          })
+          parameters["keyVaultConfiguration"] = key_vault
+          parameters["runtimePublisherPrincipalId"] = os.environ["RUNTIME_PUBLISHER_PRINCIPAL_ID"]
+          parameters["enablePlatformKeyVaultRoleAssignment"] = False
+          runtime_template = str(
+              (Path.cwd() / os.environ["RUNTIME_TEMPLATE"]).resolve()
+          )
+          render_bicepparam(
+              Path(sys.argv[3]), runtime_template, parameters
+          )
+          PY
+
+          az bicep lint --file "$RUNTIME_TEMPLATE"
+          az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
+            --subscription "$LYHYT_RUNTIME_SUBSCRIPTION_ID" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$RUNTIME_TEMPLATE" \
+            --parameters "$PARAM_FILE" \
+            --output none
