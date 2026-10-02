@@ -16,15 +16,19 @@ from scripts.pipeline.runtime_configuration import (
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--foundation-outputs", required=True, type=Path)
+    foundation_source = parser.add_mutually_exclusive_group(required=True)
+    foundation_source.add_argument("--foundation-outputs", type=Path)
+    foundation_source.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--runtime-outputs", required=True, type=Path)
     parser.add_argument("--customer-tenant-id", required=True)
     parser.add_argument("--vault-name", required=True)
     args = parser.parse_args()
 
     try:
-        foundation_outputs = json.loads(
-            args.foundation_outputs.read_text(encoding="utf-8")
+        foundation_outputs = (
+            {}
+            if args.runtime_only
+            else json.loads(args.foundation_outputs.read_text(encoding="utf-8"))
         )
         runtime_outputs = json.loads(args.runtime_outputs.read_text(encoding="utf-8"))
         values = build_runtime_configuration(
