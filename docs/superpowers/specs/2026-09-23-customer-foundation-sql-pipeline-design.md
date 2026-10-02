@@ -14,16 +14,16 @@ Provide an end-to-end GitHub Actions workflow that selects a customer and enviro
 - The runtime managed identity is not used as the SQL migration identity and receives no migration permissions.
 - No SQL passwords, client secrets, access tokens, or secret-bearing connection strings are stored in Bicep parameters, outputs, workflow outputs, files, or logs.
 - Existing `*.local.bicepparam` files are not read, changed, or exposed by the implementation.
-- The workflow cannot deploy from a branch. It must validate that `github.ref_type == 'tag'` and that `github.ref_name` starts with `v` before any deployment job can run.
+- The workflow deploys only from a branch selected in workflow dispatch. It must validate that `github.ref_type == 'branch'` before any deployment job can run.
 
 ## Release and customer selection
 
-The workflow is manually dispatched with exactly two operator inputs: `customer_id` and `environment`. `release_version` is derived from the release tag in `github.ref_name`; the leading `v` is removed before it is passed to the migration runner, so tag `v2026.09.23` produces release version `2026.09.23`.
+The workflow is manually dispatched with three operator inputs: `customer_id`, `environment`, and numeric `release_version`. The branch ref is selected by GitHub Actions, while the explicit release version is passed to the migration runner for minimum-version checks.
 
 The first resolver job performs these checks before producing job outputs:
 
-1. `GITHUB_REF_TYPE` is exactly `tag`.
-2. `GITHUB_REF_NAME` starts with `v` and has a non-empty version suffix.
+1. `GITHUB_REF_TYPE` is exactly `branch`.
+2. `release_version` is numeric and has a non-empty version value.
 3. `customer_id` identifies one catalog record.
 4. The catalog record is enabled.
 5. `environment` identifies one environment under that customer.
@@ -31,7 +31,7 @@ The first resolver job performs these checks before producing job outputs:
 7. The selected subscription ID is read from that customer/environment record and is never accepted as an input.
 8. The catalog migration identity is present and contains only non-secret object/application IDs.
 
-The resolver writes only safe values to `GITHUB_OUTPUT`. A branch invocation fails in the resolver and all deployment jobs are gated on its successful tag validation.
+The resolver writes only safe values to `GITHUB_OUTPUT`. A tag invocation fails before deployment and all deployment jobs are gated on successful branch and catalog validation.
 
 ## Catalog
 
@@ -54,7 +54,7 @@ Create `.github/workflows/customer-foundation-sql-runtime.yml` with these jobs:
 
 ### `resolve`
 
-Loads the catalog and emits the resolved customer tenant, customer subscription, location, region code, release version, migration application client ID, migration principal object ID, and safe parameter payloads. It fails on branch refs and invalid catalog selections.
+Loads the catalog and emits the resolved customer tenant, customer subscription, location, region code, release version, migration application client ID, migration principal object ID, and safe parameter payloads. It fails on tag refs and invalid catalog selections.
 
 ### `lyhyt_runtime_bootstrap`
 
@@ -162,11 +162,11 @@ Unit tests use fake database adapters and do not require Azure or a live SQL dat
 - use of `sqlServerFqdn` and `sqlDatabaseName` from apply outputs
 - pyodbc/driver/token preflight failures
 
-The workflow and catalog resolver are covered by tests that prove branch refs cannot deploy, only `v*` tags produce release versions, customer/environment validation is authoritative, migration identity values are explicit, and SQL resource IDs must belong to the selected customer subscription.
+The workflow and catalog resolver are covered by tests that prove tag refs cannot deploy, selected branches accept explicit release versions, customer/environment validation is authoritative, migration identity values are explicit, and SQL resource IDs must belong to the selected customer subscription.
 
 ## Documentation
 
-Update `README.md` with customer catalog onboarding, tag-only manual deployment, required GitHub variables/secrets and protected Environments, customer-tenant WIF behavior, apply-output handoff, private-network runner requirements, destructive approval, and the LYHYT tenant runtime boundary. Put SQL-specific bootstrap, authorization, migration authoring, and operational guidance in `docs/database/migrations/README.md`.
+Update `README.md` with customer catalog onboarding, branch-based manual deployment, required GitHub variables/secrets and protected Environments, customer-tenant WIF behavior, apply-output handoff, private-network runner requirements, destructive approval, and the LYHYT tenant runtime boundary. Put SQL-specific bootstrap, authorization, migration authoring, and operational guidance in `docs/database/migrations/README.md`.
 
 ## Verification
 

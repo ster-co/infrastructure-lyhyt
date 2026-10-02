@@ -221,20 +221,20 @@ The command reports `inserted`, `updated`, `unchanged`, and
 token, customer SQL runner, private DNS, and ODBC Driver 18 requirements as
 the migration runner; it does not accept or print a password or connection
 string. To release a new CSV version, replace the versioned source file, run
-the focused tests and importer checks, and deploy a new release tag. The
+the focused tests and importer checks, and dispatch the workflow from the
+selected branch with the new release version. The
 existing workflow then applies only the source diff while leaving
 `0001_baseline.sql` unchanged. Unit tests use an in-memory recording adapter;
 no live SQL Server is part of the local test suite.
 
 ## Workflow operation
 
-The workflow is manually dispatched from a release tag whose name starts with
-`v`, such as `v2026.09.23`. It rejects branch dispatches before any deployment
-job runs and derives `release_version` by removing the leading `v`. The only
-operator inputs are:
+The workflow is manually dispatched from a selected branch. It rejects tag
+dispatches before any deployment job runs. The operator inputs are:
 
 - `customer_id`; and
-- `environment`.
+- `environment`; and
+- `release_version`, a numeric migration version such as `2026.09.30`.
 
 The customer subscription, tenant, location, migration application client ID,
 and other deployment-safe values are resolved from `config/customers.json`.

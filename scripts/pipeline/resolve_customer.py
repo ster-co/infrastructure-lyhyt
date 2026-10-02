@@ -57,6 +57,7 @@ REQUIRED_KEY_VAULT_BOOLEAN_PARAMETERS = frozenset({
     "requireKeyVault",
 })
 AZURE_SAFE_CATALOG_VALUE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+RELEASE_VERSION = re.compile(r"\d+(?:\.\d+)*")
 
 
 def _runner_label(value: Any, field: str) -> str:
@@ -86,7 +87,19 @@ def _azure_safe_catalog_value(value: Any, field: str) -> str:
     return value
 
 
-def release_version_from_ref(ref_type: str, ref_name: str) -> str:
+def release_version_from_ref(
+    ref_type: str,
+    ref_name: str,
+    requested_release_version: str | None = None,
+) -> str:
+    if ref_type == "branch":
+        if not isinstance(requested_release_version, str) or not RELEASE_VERSION.fullmatch(
+            requested_release_version
+        ):
+            raise ValueError(
+                "branch runs require a numeric release version such as 2026.09.30"
+            )
+        return requested_release_version
     if ref_type != "tag" or not isinstance(ref_name, str) or not ref_name.startswith("v") or len(ref_name) == 1:
         raise ValueError("release_version requires a Git tag whose name starts with v")
     return ref_name[1:]
@@ -179,8 +192,11 @@ def resolve_customer(
     environment: str,
     ref_type: str,
     ref_name: str,
+    requested_release_version: str | None = None,
 ) -> ResolvedDeployment:
-    release_version = release_version_from_ref(ref_type, ref_name)
+    release_version = release_version_from_ref(
+        ref_type, ref_name, requested_release_version
+    )
     customers = catalog.get("customers") if isinstance(catalog, dict) else None
     if not isinstance(customers, list):
         raise ValueError("catalog must contain a customers array")
@@ -290,10 +306,18 @@ def main() -> int:
     parser.add_argument("--environment", required=True)
     parser.add_argument("--ref-type", required=True)
     parser.add_argument("--ref-name", required=True)
+    parser.add_argument("--release-version")
     args = parser.parse_args()
     try:
         catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
-        resolved = resolve_customer(catalog, args.customer_id, args.environment, args.ref_type, args.ref_name)
+        resolved = resolve_customer(
+            catalog,
+            args.customer_id,
+            args.environment,
+            args.ref_type,
+            args.ref_name,
+            args.release_version,
+        )
         print(json.dumps(resolved.to_safe_dict(), sort_keys=True))
     except (OSError, json.JSONDecodeError, ValueError) as error:
         print(f"resolve_customer: {error}", file=sys.stderr)

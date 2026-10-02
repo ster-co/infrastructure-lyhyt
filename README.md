@@ -101,10 +101,11 @@ Review deployment outputs for resource IDs, names, and the Container App FQDN. D
 
 The manual GitHub Actions workflow in
 `.github/workflows/customer-foundation-sql-runtime.yml` deploys one catalog
-customer and environment from a release tag. It accepts exactly two operator
-inputs: `customer_id` and `environment`. The workflow rejects branches and
-requires a `v*` tag, such as `v2026.09.23`; the migration release version is
-derived from that tag. The customer tenant, subscription, location, migration
+customer and environment from the branch selected in the GitHub Actions
+workflow-dispatch form. It accepts `customer_id`, `environment`, and the
+numeric `release_version` used for migration minimum-version checks. The
+workflow rejects tag refs and requires a branch; the migration release version
+is supplied explicitly because branches do not carry a release version. The customer tenant, subscription, location, migration
 identity, and deployment parameters come from the non-secret
 `config/customers.json` catalog. The subscription is never an operator input.
 Generated platform and customer resource IDs and URIs are deliberately not
@@ -127,6 +128,21 @@ The workflow resolves these values from the typed `customer_id`; they are no
 longer repository-level GitHub variables. They are identifiers and runner
 labels, not secrets. The referenced client application must still have a
 matching GitHub OIDC federated credential and the required Azure RBAC access.
+
+For a subject-based federated credential, replace the old tag subject with the
+selected branch subject. For example, the `main` branch uses
+`repo:ster-co/infrastructure-lyhyt:ref:refs/heads/main`. Update the federated
+credential on both the customer-tenant migration application and the LYHYT
+automation application. Because this workflow permits selecting different
+branches, create one exact credential per permitted branch or use an Entra
+claims-matching credential if your tenant supports it; do not use a broad
+repository-wide subject.
+
+Jobs that use a GitHub Environment have a different OIDC subject. Keep or add
+these exact customer-application subjects for the protected jobs:
+`repo:ster-co/infrastructure-lyhyt:environment:customer-foundation-apply` and
+`repo:ster-co/infrastructure-lyhyt:environment:sql-migrations-destructive`.
+The branch subject applies to login steps that do not use an Environment.
 
 Protect the `customer-foundation-apply` Environment with required reviewers.
 Protect `sql-migrations-destructive` separately with customer change-control

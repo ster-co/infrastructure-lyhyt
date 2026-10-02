@@ -23,6 +23,10 @@ on:
         type: string
         # Must be a key present for the selected customer in
         # config/customers.json; the resolver rejects missing records.
+      release_version:
+        description: Numeric migration release version, for example 2026.09.30
+        required: true
+        type: string
 
 env:
   CATALOG_PATH: config/customers.json
@@ -30,6 +34,7 @@ env:
   RUNTIME_TEMPLATE: infra/lyhyt-customer-runtime/main.bicep
   PLATFORM_TEMPLATE: infra/lyhyt-platform/main.bicep
   FOUNDATION_MANIFEST: docs/database/migrations/manifest.json
+  RELEASE_VERSION: ${{ inputs.release_version }}
 
 jobs:
   resolve:
@@ -54,16 +59,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Reject non-release refs
+      - name: Reject non-branch refs
         env:
           GITHUB_REF_TYPE: ${{ github.ref_type }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+          if [[ "$GITHUB_REF_TYPE" == "branch" ]]; then
             exit 0
           fi
-          echo "This workflow may run only from a release tag named v*." >&2
+          echo "This workflow may run only from a branch selected in GitHub Actions." >&2
           exit 1
 
       - name: Resolve customer catalog
@@ -82,7 +87,8 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
@@ -246,7 +252,8 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           RUNTIME_RESOURCE_GROUP="rg-lyhyt-${CUSTOMER_ID}-${DEPLOYMENT_ENVIRONMENT}-${REGION_CODE}"
           RUNTIME_CONTAINER_APP="ca-lyhyt-${CUSTOMER_ID}-api-${DEPLOYMENT_ENVIRONMENT}"
           CURRENT_RUNTIME_KEY_VAULT_URI="$(az containerapp show \
@@ -417,7 +424,8 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
           import os
@@ -502,7 +510,8 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
           import os
@@ -935,7 +944,8 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" > "$RESOLVED_FILE"
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" <<'PY'
           import json
           import os
