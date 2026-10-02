@@ -1,7 +1,7 @@
 {
   "customers": [
     {
-      "id": "pilot",
+      "id": "pilot2",
       "enabled": true,
       "tenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
       "migration": {
