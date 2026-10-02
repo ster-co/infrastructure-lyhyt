@@ -5,8 +5,8 @@
       "enabled": true,
       "tenantId": "dc5495f6-68fa-44ba-af3e-ae5e88cf1d7b",
       "migration": {
-        "principalObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
-        "applicationClientId": "8326570e-3332-46d2-90b4-632498b943ae"
+        "principalObjectId": "01e0804-0272-46c0-be7f-a728438b553b",
+        "applicationClientId": "c8cc62b3-7576-43fc-9d12-200324234db7"
       },
       "automation": {
         "lyhytAzureClientId": "8326570e-3332-46d2-90b4-632498b943ae",
