@@ -89,7 +89,7 @@
               "sdb": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"}
             },
             "enableDoclingResources": false,
-            "containerImage": "replacewithacrname.azurecr.io/pilot/your-image@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "containerImage": "lyhytcontainerregistry.azurecr.io/my-app-lyhyt@sha256:1edebf82a21ff0ced21e6996651a3e33f50b2a75d3d7b34db889977355771a89",
             "keyVaultConfiguration": {
               "enabled": true,
               "requireKeyVault": false
