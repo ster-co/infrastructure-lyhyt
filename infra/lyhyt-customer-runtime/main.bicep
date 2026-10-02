@@ -155,7 +155,7 @@ var containerRegistryResourceGroupName = containerRegistryResourceIdSegments[4]
 // a real vault. Role-assignment modules remain conditional on integration
 // being enabled.
 var platformKeyVaultSubscriptionId = keyVaultConfiguration.platformKeyVaultResourceId == ''
-  ? subscription().id
+  ? subscription().subscriptionId
   : split(keyVaultConfiguration.platformKeyVaultResourceId, '/')[2]
 var platformKeyVaultResourceGroupName = keyVaultConfiguration.platformKeyVaultResourceId == ''
   ? 'disabled'
