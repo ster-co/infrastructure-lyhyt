@@ -8,6 +8,13 @@
         "principalObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
         "applicationClientId": "8326570e-3332-46d2-90b4-632498b943ae"
       },
+      "automation": {
+        "lyhytAzureClientId": "8326570e-3332-46d2-90b4-632498b943ae",
+        "lyhytAzureTenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+        "lyhytPlatformSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+        "lyhytRuntimeSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+        "customerSqlRunnerLabel": "ubuntu-latest"
+      },
       "environments": {
         "tst": {
           "subscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
@@ -37,7 +44,7 @@
                 "format": "OpenAI",
                 "version": "2026-03-05",
                 "skuName": "GlobalStandard",
-                "capacity": 2000,
+                "capacity": 1000,
                 "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
                 "raiPolicyName": "Microsoft.DefaultV2"
               },

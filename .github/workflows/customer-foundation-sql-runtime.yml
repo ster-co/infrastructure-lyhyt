@@ -38,6 +38,11 @@ jobs:
       region_code: ${{ steps.resolve.outputs.region_code }}
       migration_application_client_id: ${{ steps.resolve.outputs.migration_application_client_id }}
       migration_principal_object_id: ${{ steps.resolve.outputs.migration_principal_object_id }}
+      lyhyt_azure_client_id: ${{ steps.resolve.outputs.lyhyt_azure_client_id }}
+      lyhyt_azure_tenant_id: ${{ steps.resolve.outputs.lyhyt_azure_tenant_id }}
+      lyhyt_platform_subscription_id: ${{ steps.resolve.outputs.lyhyt_platform_subscription_id }}
+      lyhyt_runtime_subscription_id: ${{ steps.resolve.outputs.lyhyt_runtime_subscription_id }}
+      customer_sql_runner_label: ${{ steps.resolve.outputs.customer_sql_runner_label }}
       needs_runtime_bootstrap: ${{ steps.resolve.outputs.needs_runtime_bootstrap }}
       same_tenant_rbac_enabled: ${{ steps.resolve.outputs.same_tenant_rbac_enabled }}
       runtime_key_vault_enabled: ${{ steps.resolve.outputs.runtime_key_vault_enabled }}
@@ -94,6 +99,11 @@ jobs:
               "region_code": resolved["regionCode"],
               "migration_application_client_id": resolved["migration"]["applicationClientId"],
               "migration_principal_object_id": resolved["migration"]["principalObjectId"],
+              "lyhyt_azure_client_id": resolved["automation"]["lyhytAzureClientId"],
+              "lyhyt_azure_tenant_id": resolved["automation"]["lyhytAzureTenantId"],
+              "lyhyt_platform_subscription_id": resolved["automation"]["lyhytPlatformSubscriptionId"],
+              "lyhyt_runtime_subscription_id": resolved["automation"]["lyhytRuntimeSubscriptionId"],
+              "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
               "needs_runtime_bootstrap": str(needs_bootstrap).lower(),
               "same_tenant_rbac_enabled": str(bool(
                   foundation.get("enableSameTenantRuntimeKeyVaultRoleAssignment", False)
@@ -121,15 +131,15 @@ jobs:
       - name: Log in to LYHYT tenant for shared platform outputs
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
 
       - name: Read shared platform deployment outputs
         id: deploy
         env:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
-          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
           PLATFORM_OUTPUTS_FILE: ${{ runner.temp }}/lyhyt-platform-outputs.json
         shell: bash
         run: |
@@ -189,9 +199,9 @@ jobs:
       - name: Log in to LYHYT tenant for runtime bootstrap
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.LYHYT_RUNTIME_SUBSCRIPTION_ID }}
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
 
       - name: Bootstrap runtime identity without Key Vault integration
         id: bootstrap
@@ -201,7 +211,7 @@ jobs:
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
           BOOTSTRAP_OUTPUT_FILE: ${{ runner.temp }}/runtime-bootstrap-outputs.json
-          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
           PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
           PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}
           CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}
@@ -317,7 +327,7 @@ jobs:
           INPUT_REF_NAME: ${{ github.ref_name }}
           SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
           BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
-          LYHYT_TENANT_ID: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
         run: |
@@ -393,7 +403,7 @@ jobs:
           INPUT_REF_NAME: ${{ github.ref_name }}
           SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
           BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
-          LYHYT_TENANT_ID: ${{ vars.LYHYT_AZURE_TENANT_ID }}
+          LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
@@ -483,7 +493,7 @@ jobs:
   sql_migration_preflight:
     needs: [resolve, customer_foundation_apply]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
-    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -550,7 +560,7 @@ jobs:
   sql_migration_plan:
     needs: [resolve, customer_foundation_apply, sql_migration_preflight]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_preflight.result == 'success' }}
-    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
     outputs:
       has_destructive_migrations: ${{ steps.plan.outputs.has_destructive_migrations }}
     steps:
@@ -617,7 +627,7 @@ jobs:
   sql_migration_execute:
     needs: [resolve, customer_foundation_apply, sql_migration_plan]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'false' }}
-    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -677,7 +687,7 @@ jobs:
   sql_migration_execute_destructive:
     needs: [resolve, customer_foundation_apply, sql_migration_plan]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'true' }}
-    runs-on: ${{ vars.CUSTOMER_SQL_RUNNER_LABEL }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
     environment:
       name: sql-migrations-destructive
     steps:
@@ -748,9 +758,9 @@ jobs:
       - name: Log in to LYHYT tenant for final runtime deployment
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.LYHYT_AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.LYHYT_AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.LYHYT_RUNTIME_SUBSCRIPTION_ID }}
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
 
       - name: Deploy final runtime with customer handoff
         env:
@@ -761,7 +771,7 @@ jobs:
           RUNTIME_KEY_VAULT_ENABLED: ${{ needs.resolve.outputs.runtime_key_vault_enabled }}
           FOUNDATION_KEY_VAULT_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultResourceId }}
           FOUNDATION_KEY_VAULT_URI: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultUri }}
-          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ vars.LYHYT_PLATFORM_SUBSCRIPTION_ID }}
+          LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
           PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
           PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}
           CONTAINER_REGISTRY_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.container_registry_resource_id }}

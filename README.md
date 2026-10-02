@@ -110,14 +110,23 @@ identity, and deployment parameters come from the non-secret
 Generated platform and customer resource IDs and URIs are deliberately not
 catalog fields; the workflow obtains them from Bicep deployment outputs.
 
-Before enabling the workflow, configure these GitHub variables:
+Before enabling the workflow, add the customer-specific automation values to
+the selected record in `config/customers.json`:
 
-- `CUSTOMER_SQL_RUNNER_LABEL`: label for a self-hosted runner with access to
-  the customer's private SQL endpoint and private DNS;
-- `LYHYT_AZURE_CLIENT_ID` and `LYHYT_AZURE_TENANT_ID`: the LYHYT deployment
-  application and tenant;
-- `LYHYT_RUNTIME_SUBSCRIPTION_ID`: the LYHYT customer-runtime subscription;
-- `LYHYT_PLATFORM_SUBSCRIPTION_ID`: the LYHYT shared-platform subscription.
+```json
+"automation": {
+  "lyhytAzureClientId": "...",
+  "lyhytAzureTenantId": "...",
+  "lyhytPlatformSubscriptionId": "...",
+  "lyhytRuntimeSubscriptionId": "...",
+  "customerSqlRunnerLabel": "ubuntu-latest"
+}
+```
+
+The workflow resolves these values from the typed `customer_id`; they are no
+longer repository-level GitHub variables. They are identifiers and runner
+labels, not secrets. The referenced client application must still have a
+matching GitHub OIDC federated credential and the required Azure RBAC access.
 
 Protect the `customer-foundation-apply` Environment with required reviewers.
 Protect `sql-migrations-destructive` separately with customer change-control

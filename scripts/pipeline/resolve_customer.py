@@ -59,6 +59,17 @@ REQUIRED_KEY_VAULT_BOOLEAN_PARAMETERS = frozenset({
 AZURE_SAFE_CATALOG_VALUE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
+def _runner_label(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 100
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise ValueError(f"{field} must be a non-empty GitHub runner label")
+    return value
+
+
 def _uuid(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a UUID string")
@@ -129,6 +140,11 @@ class ResolvedDeployment:
     release_version: str
     migration_principal_object_id: str
     migration_application_client_id: str
+    lyhyt_azure_client_id: str
+    lyhyt_azure_tenant_id: str
+    lyhyt_platform_subscription_id: str
+    lyhyt_runtime_subscription_id: str
+    customer_sql_runner_label: str
     foundation_parameters: dict[str, object]
     runtime_parameters: dict[str, object]
 
@@ -144,6 +160,13 @@ class ResolvedDeployment:
             "migration": {
                 "principalObjectId": self.migration_principal_object_id,
                 "applicationClientId": self.migration_application_client_id,
+            },
+            "automation": {
+                "lyhytAzureClientId": self.lyhyt_azure_client_id,
+                "lyhytAzureTenantId": self.lyhyt_azure_tenant_id,
+                "lyhytPlatformSubscriptionId": self.lyhyt_platform_subscription_id,
+                "lyhytRuntimeSubscriptionId": self.lyhyt_runtime_subscription_id,
+                "customerSqlRunnerLabel": self.customer_sql_runner_label,
             },
             "foundationParameters": copy.deepcopy(self.foundation_parameters),
             "runtimeParameters": copy.deepcopy(self.runtime_parameters),
@@ -175,6 +198,28 @@ def resolve_customer(
         raise ValueError("customer migration identity is required")
     principal_id = _uuid(migration.get("principalObjectId"), "migration principalObjectId")
     client_id = _uuid(migration.get("applicationClientId"), "migration applicationClientId")
+
+    automation = customer.get("automation")
+    if not isinstance(automation, dict):
+        raise ValueError("customer automation configuration is required")
+    lyhyt_azure_client_id = _uuid(
+        automation.get("lyhytAzureClientId"), "automation.lyhytAzureClientId"
+    )
+    lyhyt_azure_tenant_id = _uuid(
+        automation.get("lyhytAzureTenantId"), "automation.lyhytAzureTenantId"
+    )
+    lyhyt_platform_subscription_id = _uuid(
+        automation.get("lyhytPlatformSubscriptionId"),
+        "automation.lyhytPlatformSubscriptionId",
+    )
+    lyhyt_runtime_subscription_id = _uuid(
+        automation.get("lyhytRuntimeSubscriptionId"),
+        "automation.lyhytRuntimeSubscriptionId",
+    )
+    customer_sql_runner_label = _runner_label(
+        automation.get("customerSqlRunnerLabel"),
+        "automation.customerSqlRunnerLabel",
+    )
 
     environments = customer.get("environments")
     if not isinstance(environments, dict) or environment not in environments:
@@ -231,7 +276,10 @@ def resolve_customer(
     })
     return ResolvedDeployment(
         customer_id, environment, tenant_id, subscription_id, location, region_code,
-        release_version, principal_id, client_id, foundation, runtime,
+        release_version, principal_id, client_id,
+        lyhyt_azure_client_id, lyhyt_azure_tenant_id,
+        lyhyt_platform_subscription_id, lyhyt_runtime_subscription_id,
+        customer_sql_runner_label, foundation, runtime,
     )
 
 

@@ -143,12 +143,13 @@ preflight also imports `azure.identity` and fails with an actionable message
 if the package is missing; that check does not replace installation.
 
 Production SQL uses private endpoints and private DNS. Set
-`CUSTOMER_SQL_RUNNER_LABEL` to a self-hosted runner label whose runner has
-customer-network access, can resolve the private SQL hostname through the
-customer private DNS zone, and is allowed to reach Entra ID for token
-acquisition. A GitHub-hosted runner is not a substitute when public SQL access
-is disabled. Keep the runner's operating system and ODBC driver patched and
-limit its network access to the required customer services.
+`automation.customerSqlRunnerLabel` in the customer catalog to a self-hosted
+runner label whose runner has customer-network access, can resolve the private
+SQL hostname through the customer private DNS zone, and is allowed to reach
+Entra ID for token acquisition. A GitHub-hosted runner is not a substitute
+when public SQL access is disabled. Keep the runner's operating system and
+ODBC driver patched and limit its network access to the required customer
+services.
 
 ## Migration authoring rules
 
@@ -247,18 +248,18 @@ The foundation apply passes only safe outputs to the SQL jobs:
 needed and deletes it after the job, including on failure. Do not create,
 read, or commit customer-specific `*.local.bicepparam` files.
 
-### GitHub variables and environments
+### Customer automation configuration and environments
 
-Configure these non-secret GitHub repository or organization variables before
-enabling the workflow:
+Configure these non-secret values in the selected customer record under
+`config/customers.json` before enabling the workflow:
 
 | Variable | Purpose |
 | --- | --- |
-| `CUSTOMER_SQL_RUNNER_LABEL` | Self-hosted customer-network runner label for SQL preflight, plan, and apply jobs. |
-| `LYHYT_AZURE_CLIENT_ID` | LYHYT multitenant application client ID used for runtime deployment. |
-| `LYHYT_AZURE_TENANT_ID` | LYHYT tenant ID. |
-| `LYHYT_RUNTIME_SUBSCRIPTION_ID` | LYHYT subscription containing customer runtime resources. |
-| `LYHYT_PLATFORM_SUBSCRIPTION_ID` | LYHYT subscription containing shared platform resources, used for resource validation. |
+| `automation.customerSqlRunnerLabel` | Runner label for SQL preflight, plan, and apply jobs. |
+| `automation.lyhytAzureClientId` | LYHYT deployment application client ID. |
+| `automation.lyhytAzureTenantId` | LYHYT tenant ID. |
+| `automation.lyhytRuntimeSubscriptionId` | Subscription containing customer runtime resources. |
+| `automation.lyhytPlatformSubscriptionId` | Subscription containing shared platform resources. |
 
 Protect the following GitHub Environments with required reviewers and any
 customer change-control rules:
