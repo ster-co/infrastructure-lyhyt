@@ -87,6 +87,8 @@ param keyVaultConfiguration keyVaultConfigurationType = {
   requireKeyVault: false
 }
 param runtimePublisherPrincipalId string = ''
+// Enable only when the runtime identity must pull a private image from ACR.
+param enableContainerRegistryRoleAssignment bool = false
 param enablePlatformKeyVaultRoleAssignment bool = false
 param additionalTags object = {}
 
@@ -144,9 +146,9 @@ var functionHostStorageRoleDefinitionIds = [
   // Storage Blob Data Owner
   'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
   // Storage Queue Data Contributor
-  '974c5e8b-45b9-4653-ba55-5f855dd0d3'
+  '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
   // Storage Table Data Contributor
-  '0a9a7e1f-bf94-4f9a-9ec5-1c16b5e4e9c9'
+  '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 ]
 var containerRegistryResourceIdSegments = split(containerRegistryReference.resourceId, '/')
 var containerRegistrySubscriptionId = containerRegistryResourceIdSegments[2]
@@ -369,7 +371,7 @@ module sdbHostStorageRoleAssignment './modules/storage-data-role-assignment.bice
   }
 }
 
-module acrPullRoleAssignment './modules/role-assignment.bicep' = {
+module acrPullRoleAssignment './modules/role-assignment.bicep' = if (enableContainerRegistryRoleAssignment) {
   name: 'assign-acr-pull-${customerCode}-${environment}'
   scope: resourceGroup(containerRegistrySubscriptionId, containerRegistryResourceGroupName)
   params: {
