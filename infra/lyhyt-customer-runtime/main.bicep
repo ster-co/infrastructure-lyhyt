@@ -151,12 +151,15 @@ var functionHostStorageRoleDefinitionIds = [
 var containerRegistryResourceIdSegments = split(containerRegistryReference.resourceId, '/')
 var containerRegistrySubscriptionId = containerRegistryResourceIdSegments[2]
 var containerRegistryResourceGroupName = containerRegistryResourceIdSegments[4]
-// Keep the disabled default parseable without pointing at a real vault. The
-// role-assignment module is still conditional on integration being enabled.
-var platformKeyVaultResourceIdForParsing = empty(keyVaultConfiguration.platformKeyVaultResourceId) ? '/subscriptions/${subscription().id}/resourceGroups/disabled/providers/Microsoft.KeyVault/vaults/disabled' : keyVaultConfiguration.platformKeyVaultResourceId
-var platformKeyVaultResourceIdSegments = split(platformKeyVaultResourceIdForParsing, '/')
-var platformKeyVaultSubscriptionId = platformKeyVaultResourceIdSegments[2]
-var platformKeyVaultResourceGroupName = platformKeyVaultResourceIdSegments[4]
+// Keep disabled platform Key Vault integration parseable without pointing at
+// a real vault. Role-assignment modules remain conditional on integration
+// being enabled.
+var platformKeyVaultSubscriptionId = keyVaultConfiguration.platformKeyVaultResourceId == ''
+  ? subscription().id
+  : split(keyVaultConfiguration.platformKeyVaultResourceId, '/')[2]
+var platformKeyVaultResourceGroupName = keyVaultConfiguration.platformKeyVaultResourceId == ''
+  ? 'disabled'
+  : split(keyVaultConfiguration.platformKeyVaultResourceId, '/')[4]
 var acrPullRoleDefinitionId = subscriptionResourceId(containerRegistrySubscriptionId, 'Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId(platformKeyVaultSubscriptionId, 'Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var keyVaultSecretsOfficerRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
