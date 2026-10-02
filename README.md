@@ -103,7 +103,10 @@ The manual GitHub Actions workflow in
 `.github/workflows/customer-foundation-sql-runtime.yml` deploys one catalog
 customer and environment from the branch selected in the GitHub Actions
 workflow-dispatch form. It accepts `customer_id`, `environment`, and the
-numeric `release_version` used for migration minimum-version checks. The
+numeric `release_version` used for migration minimum-version checks, plus
+`bootstrap_runtime`. `bootstrap_runtime` defaults to `false`: the workflow
+discovers and reuses the existing runtime deployment outputs. Set it to
+`true` only when creating the runtime for the first time. The
 workflow rejects tag refs and requires a branch; the migration release version
 is supplied explicitly because branches do not carry a release version. The customer tenant, subscription, location, migration
 identity, and deployment parameters come from the non-secret

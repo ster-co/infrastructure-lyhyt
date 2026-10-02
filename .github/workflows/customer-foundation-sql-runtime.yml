@@ -27,6 +27,11 @@ on:
         description: Numeric migration release version, for example 2026.09.30
         required: true
         type: string
+      bootstrap_runtime:
+        description: Create the runtime resources instead of reusing an existing runtime
+        required: true
+        default: false
+        type: boolean
 
 env:
   CATALOG_PATH: config/customers.json
@@ -78,6 +83,7 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
+          BOOTSTRAP_RUNTIME: ${{ inputs.bootstrap_runtime }}
         shell: bash
         run: |
           set -euo pipefail
@@ -91,6 +97,7 @@ jobs:
             --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -98,10 +105,7 @@ jobs:
           runtime = resolved["runtimeParameters"]
           foundation = resolved["foundationParameters"]
           key_vault = runtime["keyVaultConfiguration"]
-          # The runtime vault and its workload identities are prerequisites for
-          # every runtime deployment. The bootstrap job is safe to rerun because
-          # it preserves active application Key Vault settings when present.
-          needs_bootstrap = True
+          needs_bootstrap = os.environ["BOOTSTRAP_RUNTIME"].lower() == "true"
           values = {
               "release_version": resolved["releaseVersion"],
               "customer_tenant_id": resolved["customerTenantId"],
@@ -241,6 +245,7 @@ jobs:
           REGION_CODE: ${{ needs.resolve.outputs.region_code }}
           LYHYT_AZURE_CLIENT_ID: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
           LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+          RUNTIME_DEPLOYMENT_NAME: lyhyt-runtime-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
         shell: bash
         run: |
           set -euo pipefail
@@ -326,6 +331,7 @@ jobs:
           az bicep build --file "$RUNTIME_TEMPLATE" --stdout > /dev/null
           az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
           az deployment sub create --parameters "$PARAM_FILE" \
+            --name "$RUNTIME_DEPLOYMENT_NAME" \
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$RUNTIME_TEMPLATE" \
             --query 'properties.outputs' \
@@ -378,9 +384,153 @@ jobs:
               )
           PY
 
+  lyhyt_runtime_existing:
+    needs: [resolve, lyhyt_platform]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.resolve.outputs.needs_runtime_bootstrap == 'false' }}
+    runs-on: ubuntu-latest
+    outputs:
+      identity_principal_id: ${{ steps.discover.outputs.identity_principal_id }}
+      identity_client_id: ${{ steps.discover.outputs.identity_client_id }}
+      runtime_key_vault_resource_id: ${{ steps.discover.outputs.runtime_key_vault_resource_id }}
+      runtime_key_vault_name: ${{ steps.discover.outputs.runtime_key_vault_name }}
+      runtime_key_vault_uri: ${{ steps.discover.outputs.runtime_key_vault_uri }}
+      document_parser_identity_principal_id: ${{ steps.discover.outputs.document_parser_identity_principal_id }}
+      mailbox_sync_identity_principal_id: ${{ steps.discover.outputs.mailbox_sync_identity_principal_id }}
+      sdb_identity_principal_id: ${{ steps.discover.outputs.sdb_identity_principal_id }}
+      document_parser_function_app_hostname: ${{ steps.discover.outputs.document_parser_function_app_hostname }}
+      mailbox_sync_function_app_hostname: ${{ steps.discover.outputs.mailbox_sync_function_app_hostname }}
+      sdb_function_app_hostname: ${{ steps.discover.outputs.sdb_function_app_hostname }}
+      function_host_storage_account_name: ${{ steps.discover.outputs.function_host_storage_account_name }}
+      publisher_principal_id: ${{ steps.discover.outputs.publisher_principal_id }}
+      require_key_vault: ${{ steps.discover.outputs.require_key_vault }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to LYHYT tenant to discover the existing runtime
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+
+      - name: Discover existing runtime deployment outputs
+        id: discover
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          REGION_CODE: ${{ needs.resolve.outputs.region_code }}
+          LYHYT_AZURE_CLIENT_ID: ${{ needs.resolve.outputs.lyhyt_azure_client_id }}
+          LYHYT_RUNTIME_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_runtime_subscription_id }}
+          DEPLOYMENT_OUTPUTS_FILE: ${{ runner.temp }}/runtime-deployment-outputs.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNTIME_RESOURCE_GROUP="rg-lyhyt-${CUSTOMER_ID}-${DEPLOYMENT_ENVIRONMENT}-${REGION_CODE}"
+          RUNTIME_CONTAINER_APP="ca-lyhyt-${CUSTOMER_ID}-api-${DEPLOYMENT_ENVIRONMENT}"
+          az deployment sub list \
+            --query "[?properties.provisioningState=='Succeeded']" \
+            --output json > "$DEPLOYMENT_OUTPUTS_FILE"
+          REQUIRE_KEY_VAULT="$(az containerapp show \
+            --name "$RUNTIME_CONTAINER_APP" \
+            --resource-group "$RUNTIME_RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?name=='REQUIRE_KEY_VAULT'].value | [0]" \
+            --output tsv)"
+          PUBLISHER_PRINCIPAL_ID="$(az ad sp show --id "$LYHYT_AZURE_CLIENT_ID" --query id --output tsv)"
+          export REQUIRE_KEY_VAULT PUBLISHER_PRINCIPAL_ID
+          python3 - "$DEPLOYMENT_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$LYHYT_RUNTIME_SUBSCRIPTION_ID" "$RUNTIME_RESOURCE_GROUP" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.deployment_outputs import (
+              extract_runtime_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              deployments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              if not isinstance(deployments, list):
+                  raise ValueError("subscription deployments must be a list")
+              expected_resource_group = sys.argv[4].casefold()
+              candidates = []
+              for deployment in deployments:
+                  properties = deployment.get("properties") if isinstance(deployment, dict) else None
+                  if not isinstance(properties, dict):
+                      continue
+                  try:
+                      values = extract_runtime_outputs(properties.get("outputs")).to_safe_dict()
+                      validate_resource_id_subscription(
+                          values["runtimeKeyVaultResourceId"],
+                          sys.argv[3],
+                          "Microsoft.KeyVault",
+                      )
+                  except (TypeError, ValueError):
+                      continue
+                  resource_group_segment = "/resourcegroups/"
+                  resource_id = values["runtimeKeyVaultResourceId"].casefold()
+                  if resource_group_segment not in resource_id:
+                      continue
+                  resource_group = resource_id.split(resource_group_segment, 1)[1].split("/", 1)[0]
+                  if resource_group != expected_resource_group:
+                      continue
+                  candidates.append((str(properties.get("timestamp") or ""), values))
+              if not candidates:
+                  raise ValueError("no successful runtime deployment outputs matched the existing runtime")
+              values = max(candidates, key=lambda item: item[0])[1]
+              if not os.environ.get("REQUIRE_KEY_VAULT", "").strip():
+                  raise ValueError("existing runtime does not expose REQUIRE_KEY_VAULT")
+              if not os.environ.get("PUBLISHER_PRINCIPAL_ID", "").strip():
+                  raise ValueError("LYHYT publisher principal ID is empty")
+          except (OSError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit("existing runtime discovery returned invalid safe outputs") from None
+
+          output_names = {
+              "runtimeKeyVaultResourceId": "runtime_key_vault_resource_id",
+              "runtimeKeyVaultName": "runtime_key_vault_name",
+              "runtimeKeyVaultUri": "runtime_key_vault_uri",
+              "identityClientId": "identity_client_id",
+              "identityPrincipalId": "identity_principal_id",
+              "documentParserIdentityPrincipalId": "document_parser_identity_principal_id",
+              "mailboxSyncIdentityPrincipalId": "mailbox_sync_identity_principal_id",
+              "sdbIdentityPrincipalId": "sdb_identity_principal_id",
+              "documentParserFunctionAppHostname": "document_parser_function_app_hostname",
+              "mailboxSyncFunctionAppHostname": "mailbox_sync_function_app_hostname",
+              "sdbFunctionAppHostname": "sdb_function_app_hostname",
+              "functionHostStorageAccountName": "function_host_storage_account_name",
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for source_name, output_name in output_names.items():
+                  output.write(f"{output_name}={values[source_name]}\n")
+              output.write(f"publisher_principal_id={os.environ['PUBLISHER_PRINCIPAL_ID']}\n")
+              output.write(f"require_key_vault={os.environ['REQUIRE_KEY_VAULT'].strip().lower()}\n")
+          PY
+
+  lyhyt_runtime_outputs:
+    needs: [resolve, lyhyt_runtime_bootstrap, lyhyt_runtime_existing]
+    if: ${{ always() && needs.resolve.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_existing.result == 'success') }}
+    runs-on: ubuntu-latest
+    outputs:
+      identity_principal_id: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id || needs.lyhyt_runtime_existing.outputs.identity_principal_id }}
+      identity_client_id: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.identity_client_id || needs.lyhyt_runtime_existing.outputs.identity_client_id }}
+      runtime_key_vault_resource_id: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_resource_id || needs.lyhyt_runtime_existing.outputs.runtime_key_vault_resource_id }}
+      runtime_key_vault_name: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_name || needs.lyhyt_runtime_existing.outputs.runtime_key_vault_name }}
+      runtime_key_vault_uri: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_uri || needs.lyhyt_runtime_existing.outputs.runtime_key_vault_uri }}
+      document_parser_function_app_hostname: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.document_parser_function_app_hostname || needs.lyhyt_runtime_existing.outputs.document_parser_function_app_hostname }}
+      mailbox_sync_function_app_hostname: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.mailbox_sync_function_app_hostname || needs.lyhyt_runtime_existing.outputs.mailbox_sync_function_app_hostname }}
+      sdb_function_app_hostname: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.sdb_function_app_hostname || needs.lyhyt_runtime_existing.outputs.sdb_function_app_hostname }}
+      function_host_storage_account_name: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.function_host_storage_account_name || needs.lyhyt_runtime_existing.outputs.function_host_storage_account_name }}
+      publisher_principal_id: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.publisher_principal_id || needs.lyhyt_runtime_existing.outputs.publisher_principal_id }}
+      require_key_vault: ${{ needs.lyhyt_runtime_bootstrap.result == 'success' && needs.lyhyt_runtime_bootstrap.outputs.require_key_vault || needs.lyhyt_runtime_existing.outputs.require_key_vault }}
+    steps:
+      - name: Confirm runtime handoff source
+        shell: bash
+        run: echo "Using the existing runtime handoff when bootstrap is skipped."
+
   customer_foundation_what_if:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.lyhyt_runtime_outputs.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -410,7 +560,7 @@ jobs:
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
           SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
-          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
+          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_outputs.outputs.identity_principal_id }}
           LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
@@ -456,8 +606,8 @@ jobs:
             --template-file "$FOUNDATION_TEMPLATE"
 
   customer_foundation_apply:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_what_if]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_what_if.result == 'success' && (needs.lyhyt_runtime_bootstrap.result == 'success' || needs.lyhyt_runtime_bootstrap.result == 'skipped') }}
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs, customer_foundation_what_if]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_what_if.result == 'success' && needs.lyhyt_runtime_outputs.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: customer-foundation-apply
@@ -494,7 +644,7 @@ jobs:
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
           SAME_TENANT_RBAC_ENABLED: ${{ needs.resolve.outputs.same_tenant_rbac_enabled }}
-          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.identity_principal_id }}
+          BOOTSTRAP_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_outputs.outputs.identity_principal_id }}
           LYHYT_TENANT_ID: ${{ needs.resolve.outputs.lyhyt_azure_tenant_id }}
           FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
@@ -573,8 +723,8 @@ jobs:
           PY
 
   runtime_configuration_publish:
-    needs: [resolve, lyhyt_runtime_bootstrap, customer_foundation_apply]
-    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_runtime_bootstrap.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    needs: [resolve, lyhyt_runtime_outputs, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.lyhyt_runtime_outputs.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -590,7 +740,7 @@ jobs:
       - name: Publish complete runtime configuration
         env:
           CUSTOMER_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
-          RUNTIME_KEY_VAULT_NAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_name }}
+          RUNTIME_KEY_VAULT_NAME: ${{ needs.lyhyt_runtime_outputs.outputs.runtime_key_vault_name }}
           FOUNDATION_SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
           FOUNDATION_SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
           FOUNDATION_AI_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.aiEndpoint }}
@@ -600,10 +750,10 @@ jobs:
           FOUNDATION_GPT54_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt54DeploymentName }}
           FOUNDATION_GPT5_MINI_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt5MiniDeploymentName }}
           FOUNDATION_EMBEDDING_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.textEmbedding3LargeDeploymentName }}
-          RUNTIME_DOCUMENT_PARSER_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.document_parser_function_app_hostname }}
-          RUNTIME_MAILBOX_SYNC_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.mailbox_sync_function_app_hostname }}
-          RUNTIME_SDB_HOSTNAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.sdb_function_app_hostname }}
-          RUNTIME_STORAGE_ACCOUNT_NAME: ${{ needs.lyhyt_runtime_bootstrap.outputs.function_host_storage_account_name }}
+          RUNTIME_DOCUMENT_PARSER_HOSTNAME: ${{ needs.lyhyt_runtime_outputs.outputs.document_parser_function_app_hostname }}
+          RUNTIME_MAILBOX_SYNC_HOSTNAME: ${{ needs.lyhyt_runtime_outputs.outputs.mailbox_sync_function_app_hostname }}
+          RUNTIME_SDB_HOSTNAME: ${{ needs.lyhyt_runtime_outputs.outputs.sdb_function_app_hostname }}
+          RUNTIME_STORAGE_ACCOUNT_NAME: ${{ needs.lyhyt_runtime_outputs.outputs.function_host_storage_account_name }}
           FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/runtime-foundation-outputs.json
           RUNTIME_OUTPUTS_FILE: ${{ runner.temp }}/runtime-outputs.json
         shell: bash
@@ -903,7 +1053,7 @@ jobs:
             --output json
 
   lyhyt_runtime:
-    needs: [resolve, lyhyt_platform, lyhyt_runtime_bootstrap, customer_foundation_apply, runtime_configuration_publish, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    needs: [resolve, lyhyt_platform, lyhyt_runtime_outputs, customer_foundation_apply, runtime_configuration_publish, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
     if: ${{ always() && needs.resolve.result == 'success' && needs.lyhyt_platform.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.runtime_configuration_publish.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
     runs-on: ubuntu-latest
     steps:
@@ -923,10 +1073,10 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
           INPUT_REF_NAME: ${{ github.ref_name }}
-          RUNTIME_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_resource_id }}
-          RUNTIME_KEY_VAULT_URI: ${{ needs.lyhyt_runtime_bootstrap.outputs.runtime_key_vault_uri }}
-          REQUIRE_KEY_VAULT: ${{ needs.lyhyt_runtime_bootstrap.outputs.require_key_vault }}
-          RUNTIME_PUBLISHER_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_bootstrap.outputs.publisher_principal_id }}
+          RUNTIME_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_runtime_outputs.outputs.runtime_key_vault_resource_id }}
+          RUNTIME_KEY_VAULT_URI: ${{ needs.lyhyt_runtime_outputs.outputs.runtime_key_vault_uri }}
+          REQUIRE_KEY_VAULT: ${{ needs.lyhyt_runtime_outputs.outputs.require_key_vault }}
+          RUNTIME_PUBLISHER_PRINCIPAL_ID: ${{ needs.lyhyt_runtime_outputs.outputs.publisher_principal_id }}
           LYHYT_PLATFORM_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.lyhyt_platform_subscription_id }}
           PLATFORM_KEY_VAULT_RESOURCE_ID: ${{ needs.lyhyt_platform.outputs.platform_key_vault_resource_id }}
           PLATFORM_KEY_VAULT_URI: ${{ needs.lyhyt_platform.outputs.platform_key_vault_uri }}

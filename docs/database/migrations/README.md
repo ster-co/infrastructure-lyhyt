@@ -234,7 +234,10 @@ dispatches before any deployment job runs. The operator inputs are:
 
 - `customer_id`; and
 - `environment`; and
-- `release_version`, a numeric migration version such as `2026.09.30`.
+- `release_version`, a numeric migration version such as `2026.09.30`; and
+- `bootstrap_runtime`, which defaults to `false` and reuses the existing LYHYT
+  runtime deployment outputs. Set it to `true` only for initial runtime
+  creation.
 
 The customer subscription, tenant, location, migration application client ID,
 and other deployment-safe values are resolved from `config/customers.json`.

@@ -18,7 +18,12 @@ Provide an end-to-end GitHub Actions workflow that selects a customer and enviro
 
 ## Release and customer selection
 
-The workflow is manually dispatched with three operator inputs: `customer_id`, `environment`, and numeric `release_version`. The branch ref is selected by GitHub Actions, while the explicit release version is passed to the migration runner for minimum-version checks.
+The workflow is manually dispatched with `customer_id`, `environment`, numeric
+`release_version`, and `bootstrap_runtime`. The branch ref is selected by
+GitHub Actions, while the explicit release version is passed to the migration
+runner for minimum-version checks. `bootstrap_runtime` defaults to `false`;
+the workflow discovers and reuses the existing runtime deployment outputs, and
+is set to `true` only when the runtime must be created.
 
 The first resolver job performs these checks before producing job outputs:
 
