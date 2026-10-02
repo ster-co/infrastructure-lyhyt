@@ -202,7 +202,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PARAM_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-bootstrap-XXXXXX.bicepparam")"
+          PARAM_FILE="$(mktemp "${GITHUB_WORKSPACE}/infra/lyhyt-customer-runtime/lyhyt-runtime-bootstrap-XXXXXX.bicepparam")"
           RUNTIME_DEPLOYMENT_OUTPUTS_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-existing-XXXXXX.json")"
           RUNTIME_DEPLOYMENT_ERROR_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-existing-XXXXXX.err")"
           trap 'rm -f "$PARAM_FILE" "$RUNTIME_DEPLOYMENT_OUTPUTS_FILE" "$RUNTIME_DEPLOYMENT_ERROR_FILE"' EXIT
@@ -340,12 +340,7 @@ jobs:
           parameters["keyVaultConfiguration"] = key_vault
           parameters["runtimePublisherPrincipalId"] = os.environ["PUBLISHER_PRINCIPAL_ID"]
           parameters["enablePlatformKeyVaultRoleAssignment"] = False
-          runtime_template = str(
-              (Path.cwd() / os.environ["RUNTIME_TEMPLATE"]).resolve()
-          )
-          render_bicepparam(
-              Path(sys.argv[2]), runtime_template, parameters
-          )
+          render_bicepparam(Path(sys.argv[2]), "main.bicep", parameters)
           PY
 
           az bicep lint --file "$RUNTIME_TEMPLATE"
@@ -487,7 +482,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PARAM_FILE="$(mktemp "${RUNNER_TEMP}/lyhyt-runtime-final-XXXXXX.bicepparam")"
+          PARAM_FILE="$(mktemp "${GITHUB_WORKSPACE}/infra/lyhyt-customer-runtime/lyhyt-runtime-final-XXXXXX.bicepparam")"
           trap 'rm -f "$PARAM_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-runtime-final.json"
           RUNTIME_OUTPUTS_FILE="${RUNNER_TEMP}/lyhyt-runtime-final-outputs.json"
@@ -552,12 +547,7 @@ jobs:
           parameters["keyVaultConfiguration"] = key_vault
           parameters["runtimePublisherPrincipalId"] = os.environ["RUNTIME_PUBLISHER_PRINCIPAL_ID"]
           parameters["enablePlatformKeyVaultRoleAssignment"] = False
-          runtime_template = str(
-              (Path.cwd() / os.environ["RUNTIME_TEMPLATE"]).resolve()
-          )
-          render_bicepparam(
-              Path(sys.argv[3]), runtime_template, parameters
-          )
+          render_bicepparam(Path(sys.argv[3]), "main.bicep", parameters)
           PY
 
           az bicep lint --file "$RUNTIME_TEMPLATE"
