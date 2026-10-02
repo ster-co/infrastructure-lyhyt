@@ -374,7 +374,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
+      - name: Check GitHub OIDC availability
+        shell: bash
+        run: |
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || {
+            echo "GitHub OIDC endpoint unavailable; id-token permission was not granted"
+            exit 1
+          }
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || {
+            echo "GitHub OIDC token unavailable"
+            exit 1
+          }
       - name: Log in to customer tenant for foundation what-if
         uses: azure/login@v2
         with:
