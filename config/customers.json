@@ -5,7 +5,7 @@
       "enabled": true,
       "tenantId": "dc5495f6-68fa-44ba-af3e-ae5e88cf1d7b",
       "migration": {
-        "principalObjectId": "101e0804-0272-46c0-be7f-a728438b553b",
+        "principalObjectId": "c7ad50b1-8234-4315-bd80-578e0645ce9f",
         "applicationClientId": "c8cc62b3-7576-43fc-9d12-200324234db7"
       },
       "automation": {
