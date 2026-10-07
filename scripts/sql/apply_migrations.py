@@ -118,6 +118,25 @@ def _token_attrs(token: str) -> dict[int, bytes]:
     return {ACCESS_TOKEN_ATTRIBUTE: struct.pack("=i", len(token_bytes)) + token_bytes}
 
 
+def _safe_sqlstate(exc: Exception) -> str | None:
+    args = getattr(exc, "args", ())
+    if not args or not isinstance(args[0], str):
+        return None
+    candidate = args[0].strip().upper()
+    if re.fullmatch(r"[A-Z0-9]{5}", candidate):
+        return candidate
+    match = re.match(r"^\[([A-Z0-9]{5})\](?:\s|$)", candidate)
+    return match.group(1) if match else None
+
+
+def _preflight_sql_error(stage: str, exc: Exception, guidance: str) -> MigrationError:
+    sqlstate = _safe_sqlstate(exc)
+    state_detail = f" (SQLSTATE {sqlstate})" if sqlstate else ""
+    return MigrationError(
+        f"SQL migration preflight could not {stage}{state_detail}; {guidance}"
+    )
+
+
 def _connect_with_access_token(
     pyodbc_module: Any,
     token_provider: Any,
@@ -137,15 +156,22 @@ def _connect_with_access_token(
 
     try:
         access_token = token_provider.get_token(TOKEN_SCOPE).token
+    except Exception as exc:
+        raise MigrationError(
+            "SQL migration preflight could not acquire the SQL access token; "
+            "check Azure CLI token authentication"
+        ) from exc
+
+    try:
         return connector(
             _build_connection_string(server, database),
             attrs_before=_token_attrs(access_token),
         )
-    except MigrationError:
-        raise
     except Exception as exc:
-        raise MigrationError(
-            "SQL migration preflight failed; verify the SQL bootstrap user and token authentication"
+        raise _preflight_sql_error(
+            "open the token-authenticated SQL connection",
+            exc,
+            "check SQL network access and the migration database principal",
         ) from exc
 
 
@@ -170,8 +196,10 @@ def check_python_driver_and_token(
     except MigrationError as exc:
         failure = exc
     except Exception as exc:
-        failure = MigrationError(
-            "SQL migration preflight failed; verify the SQL bootstrap user and token authentication"
+        failure = _preflight_sql_error(
+            "execute the preflight query",
+            exc,
+            "check access to the target database",
         )
     finally:
         if connection is not None:
