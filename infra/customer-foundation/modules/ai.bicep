@@ -33,18 +33,10 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2026-05-15-preview' = 
   }
 }
 
-var modelDeploymentResourceIds = [
-  for deployment in deployments: resourceId(
-    'Microsoft.CognitiveServices/accounts/deployments',
-    aiServicesName,
-    deployment.name
-  )
-]
-
-resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2026-05-15-preview' = [for (deployment, index) in deployments: {
+@batchSize(1)
+resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2026-05-15-preview' = [for deployment in deployments: {
   parent: aiServices
   name: deployment.name
-  dependsOn: index == 0 ? [] : [modelDeploymentResourceIds[index - 1]]
   sku: {
     capacity: deployment.capacity
     name: deployment.skuName
