@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import re
 import struct
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +35,8 @@ LOCK_TIMEOUT_MS = 0
 LEDGER_TABLE = "dbo.sdb_schema_migrations"
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 _DATABASE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_SQL_FIREWALL_PROPAGATION_RETRIES = 10
+_SQL_FIREWALL_PROPAGATION_RETRY_SECONDS = 30
 
 
 class AzureCliTokenProvider:
@@ -129,9 +133,30 @@ def _safe_sqlstate(exc: Exception) -> str | None:
     return match.group(1) if match else None
 
 
+def _safe_sqlserver_error_code(exc: Exception) -> str | None:
+    args = getattr(exc, "args", ())
+    for diagnostic in args[1:]:
+        if not isinstance(diagnostic, str):
+            continue
+        match = re.search(
+            r"\[SQL Server\].*\((\d{3,6})\)\s+\(SQL[A-Za-z][A-Za-z0-9]*\)\s*$",
+            diagnostic,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return match.group(1)
+    return None
+
+
 def _preflight_sql_error(stage: str, exc: Exception, guidance: str) -> MigrationError:
+    diagnostics = []
     sqlstate = _safe_sqlstate(exc)
-    state_detail = f" (SQLSTATE {sqlstate})" if sqlstate else ""
+    sqlserver_error_code = _safe_sqlserver_error_code(exc)
+    if sqlstate:
+        diagnostics.append(f"SQLSTATE {sqlstate}")
+    if sqlserver_error_code:
+        diagnostics.append(f"SQL Server error {sqlserver_error_code}")
+    state_detail = f" ({', '.join(diagnostics)})" if diagnostics else ""
     return MigrationError(
         f"SQL migration preflight could not {stage}{state_detail}; {guidance}"
     )
@@ -162,17 +187,30 @@ def _connect_with_access_token(
             "check Azure CLI token authentication"
         ) from exc
 
-    try:
-        return connector(
-            _build_connection_string(server, database),
-            attrs_before=_token_attrs(access_token),
-        )
-    except Exception as exc:
-        raise _preflight_sql_error(
-            "open the token-authenticated SQL connection",
-            exc,
-            "check SQL network access and the migration database principal",
-        ) from exc
+    connection_string = _build_connection_string(server, database)
+    token_attributes = _token_attrs(access_token)
+    for retry in range(_SQL_FIREWALL_PROPAGATION_RETRIES + 1):
+        try:
+            return connector(connection_string, attrs_before=token_attributes)
+        except Exception as exc:
+            if (
+                retry < _SQL_FIREWALL_PROPAGATION_RETRIES
+                and os.environ.get("SQL_FIREWALL_RULE_NAME")
+                and _safe_sqlserver_error_code(exc) == "40615"
+            ):
+                print(
+                    "SQL firewall rule is still propagating; "
+                    f"retrying connection ({retry + 1}/{_SQL_FIREWALL_PROPAGATION_RETRIES}).",
+                    file=sys.stderr,
+                )
+                time.sleep(_SQL_FIREWALL_PROPAGATION_RETRY_SECONDS)
+                continue
+            raise _preflight_sql_error(
+                "open the token-authenticated SQL connection",
+                exc,
+                "check SQL network access and the migration database principal",
+            ) from exc
+    raise MigrationError("SQL connection retry loop ended unexpectedly")
 
 
 def check_python_driver_and_token(

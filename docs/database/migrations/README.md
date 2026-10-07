@@ -127,7 +127,8 @@ The runner must have all of the following:
 
 - Python `pyodbc`;
 - Python package `azure-identity==1.25.3`;
-- `ODBC Driver 18 for SQL Server`;
+- `ODBC Driver 18 for SQL Server` (installed by SQL jobs on GitHub-hosted Linux
+  runners; self-hosted runners must have it installed);
 - an Azure CLI login established by `azure/login` for the catalog migration
   application; and
 - an Entra token for `https://database.windows.net/.default`.
@@ -138,12 +139,22 @@ runner:
 
 ```bash
 python3 -m pip install --requirement requirements.txt
-python3 -c 'import azure.identity'
+python3 -c 'import azure.identity, pyodbc'
 ```
 
 The workflow repeats these commands in every SQL job. The migration runner's
-preflight also imports `azure.identity` and fails with an actionable message
-if the package is missing; that check does not replace installation.
+preflight also checks `azure.identity` and `pyodbc` and fails with an actionable
+message if either package is missing; that check does not replace installation.
+
+For GitHub-hosted runners connecting to SQL servers with public network access
+enabled, the SQL jobs add a firewall rule for that job's single outbound IPv4
+address and remove it in an `always()` cleanup step. The customer WIF identity
+must be allowed to create and delete `Microsoft.Sql/servers/firewallRules` on
+the target SQL server. Self-hosted runners and servers with public access
+disabled skip this rule and use their configured customer network path.
+Production jobs never open a public firewall rule. A runner interruption can
+prevent cleanup; rules use the `lyhyt-gha-` name prefix so an orphan can be
+identified and removed from the SQL server's Networking firewall-rule list.
 
 Production SQL uses private endpoints and private DNS. Set
 `automation.customerSqlRunnerLabel` in the customer catalog to a self-hosted

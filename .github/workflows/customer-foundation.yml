@@ -39,6 +39,7 @@ jobs:
       migration_application_client_id: ${{ steps.resolve.outputs.migration_application_client_id }}
       migration_principal_object_id: ${{ steps.resolve.outputs.migration_principal_object_id }}
       customer_sql_runner_label: ${{ steps.resolve.outputs.customer_sql_runner_label }}
+      sql_public_network_access: ${{ steps.resolve.outputs.sql_public_network_access }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -86,6 +87,7 @@ jobs:
               "migration_application_client_id": resolved["migration"]["applicationClientId"],
               "migration_principal_object_id": resolved["migration"]["principalObjectId"],
               "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
+              "sql_public_network_access": resolved["foundationParameters"]["publicNetworkAccess"],
           }
           with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
               for name, value in values.items():
@@ -411,12 +413,23 @@ jobs:
               raise SystemExit("SQL resource output subscription validation failed") from None
           PY
 
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
+
       - name: Run mandatory Python, driver, token, and SQL preflight
         env:
           SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
           SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -427,6 +440,15 @@ jobs:
             --release-version "$RELEASE_VERSION" \
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --preflight
+
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
 
   sql_migration_plan:
     needs: [resolve, customer_foundation_apply, sql_migration_preflight]
@@ -520,6 +542,16 @@ jobs:
       - name: Set up SQL Server ODBC Driver 18
         uses: ./.github/actions/setup-sql-odbc-driver
 
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
+
       - name: Apply approved non-destructive SQL migrations
         env:
           SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
@@ -529,6 +561,7 @@ jobs:
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -558,6 +591,15 @@ jobs:
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --output json
 
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
+
   sql_migration_execute_destructive:
     needs: [resolve, customer_foundation_apply, sql_migration_plan]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'true' }}
@@ -585,6 +627,16 @@ jobs:
       - name: Set up SQL Server ODBC Driver 18
         uses: ./.github/actions/setup-sql-odbc-driver
 
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
+
       - name: Apply approved destructive SQL migrations
         env:
           SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
@@ -594,6 +646,7 @@ jobs:
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -623,6 +676,15 @@ jobs:
             --sql-database-name "$SQL_DATABASE_NAME" \
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --output json
+
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
 
   customer_sql_complete:
     needs: [resolve, sql_migration_preflight, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
