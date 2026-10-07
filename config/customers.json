@@ -99,6 +99,106 @@
           }
         }
       }
+    },
+    {
+      "id": "pilot3",
+      "enabled": true,
+      "tenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+      "migration": {
+        "principalObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
+        "applicationClientId": "8326570e-3332-46d2-90b4-632498b943ae"
+      },
+      "automation": {
+        "lyhytAzureClientId": "8326570e-3332-46d2-90b4-632498b943ae",
+        "lyhytAzureTenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+        "lyhytPlatformSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+        "lyhytRuntimeSubscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+        "customerSqlRunnerLabel": "ubuntu-latest"
+      },
+      "environments": {
+        "tst": {
+          "subscriptionId": "ff63d4b8-4694-4fff-999d-4adfa6e65d5d",
+          "location": "swedencentral",
+          "regionCode": "swec",
+          "foundationParameters": {
+            "sqlEntraAdministratorLogin": "LYHYT Infrastructure TST",
+            "sqlEntraAdministratorObjectId": "efbf96fc-efab-4c35-80e1-2731b69faae3",
+            "sqlEntraAdministratorTenantId": "a450ace8-4fd1-4338-a906-912ee75dc7e3",
+            "sqlEntraOnlyAuthentication": true,
+            "storageContainerNames": ["rag-files", "offerte-backups"],
+            "aiDeployments": [
+              {
+                "name": "gpt-5",
+                "model": "gpt-5",
+                "format": "OpenAI",
+                "version": "2025-08-07",
+                "skuName": "GlobalStandard",
+                "capacity": 100,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "gpt-5.4",
+                "model": "gpt-5.4",
+                "format": "OpenAI",
+                "version": "2026-03-05",
+                "skuName": "GlobalStandard",
+                "capacity": 100,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "gpt-5-mini",
+                "model": "gpt-5-mini",
+                "format": "OpenAI",
+                "version": "2025-08-07",
+                "skuName": "GlobalStandard",
+                "capacity": 100,
+                "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              {
+                "name": "text-embedding-3-large",
+                "model": "text-embedding-3-large",
+                "format": "OpenAI",
+                "version": "1",
+                "skuName": "GlobalStandard",
+                "capacity": 250,
+                "versionUpgradeOption": "NoAutoUpgrade",
+                "raiPolicyName": "Microsoft.DefaultV2"
+              }
+            ],
+            "additionalTags": {"workload": "customer-foundation", "purpose": "customer-foundation-pilot"},
+            "keyVaultEnablePurgeProtection": true,
+            "keyVaultSoftDeleteRetentionInDays": 90,
+            "publicNetworkAccess": "Enabled",
+            "storageNetworkDefaultAction": "Allow",
+            "keyVaultNetworkDefaultAction": "Allow",
+            "runtimeAccessPrincipalId": "00000000-0000-0000-0000-000000000000",
+            "enableSameTenantRuntimeKeyVaultRoleAssignment": false
+          },
+          "runtimeParameters": {
+            "vnetAddressPrefix": "10.20.0.0/21",
+            "publicNetworkAccess": "Enabled",
+            "zoneRedundant": false,
+            "functionHostStorageNetworkDefaultAction": "Allow",
+            "runtimeKeyVaultNetworkDefaultAction": "Deny",
+            "functionRuntimeConfiguration": {
+              "documentParser": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"},
+              "mailboxSync": {"workerRuntime": "python", "workerRuntimeVersion": "3.11"},
+              "sdb": {"workerRuntime": "python", "workerRuntimeVersion": "3.12"}
+            },
+            "enableDoclingResources": false,
+            "containerImage": "lyhytcontainerregistry.azurecr.io/my-app-lyhyt@sha256:1edebf82a21ff0ced21e6996651a3e33f50b2a75d3d7b34db889977355771a89",
+            "keyVaultConfiguration": {
+              "enabled": true,
+              "requireKeyVault": false
+            },
+            "enablePlatformKeyVaultRoleAssignment": false,
+            "additionalTags": {"workload": "customer-runtime", "purpose": "foundation-pilot"}
+          }
+        }
+      }
     }
   ]
 }

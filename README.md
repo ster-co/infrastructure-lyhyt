@@ -61,7 +61,7 @@ git diff --check
 
 ## Deployment order
 
-The shared platform must already exist. The customer workflow reads its safe ACR and optional platform Key Vault outputs without redeploying it, applies the selected customer foundation first, runs the customer SQL gates, then bootstraps or discovers that customer's LYHYT runtime. It publishes the safe foundation and runtime outputs into the per-customer runtime Key Vault and performs the final runtime deployment with the vault URI. Review and customize each parameter file before deployment. Pass only safe deployment outputs between the independent entry points. Keep `REQUIRE_KEY_VAULT=false` until application validation and restart workloads after hydration changes. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the executable sequence.
+The repository has separate customer-foundation-only, combined customer-foundation/runtime, and LYHYT-runtime-only workflows. The two customer-foundation workflows share a concurrency group so they cannot deploy the same customer/environment at once. Review and customize each parameter file before deployment, and pass only safe deployment outputs between independent entry points. See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) for the vault boundaries and publication sequence.
 
 ### Standalone runtime deployment workflow
 
@@ -124,7 +124,41 @@ az deployment sub create \
 
 Review deployment outputs for resource IDs, names, and the Container App FQDN. Do not commit credentials, secrets, customer tenant details, or local parameter files; files matching `*.local.bicepparam` are ignored.
 
-## Customer deployment workflow
+## Customer deployment workflows
+
+### Customer foundation only
+
+The additional manual workflow in
+`.github/workflows/customer-foundation.yml` deploys the customer foundation
+from `infra/customer-foundation/main.bicep`, publishes its 12 required
+foundation outputs into the customer foundation Key Vault, and runs SQL
+preflight, migration planning, and exactly one approved migration path. It
+does not authenticate to the LYHYT tenant, read shared-platform outputs,
+deploy LYHYT runtime resources, or publish to the LYHYT runtime vault. Its
+inputs are `customer_id`, `environment`, and numeric `release_version`; it
+rejects tag refs. The final workflow gate succeeds only if the foundation
+apply, customer-vault publication, and SQL path all succeed.
+
+The workflow uses `migration.applicationClientId` as the `azure/login`
+`client-id`. `migration.principalObjectId` is the customer tenant's enterprise
+application/service principal **object ID**; the foundation Bicep uses this
+tenant-local object ID as the `Key Vault Secrets Officer` RBAC principal for
+the customer foundation vault. It is not the application/client ID. The
+deployment identity must have permission to create that role assignment.
+Protect the `customer-foundation-apply` GitHub Environment with required
+reviewers. Key Vault publication and SQL jobs use
+`automation.customerSqlRunnerLabel`, which must reach customer private DNS and
+private endpoints when those are enabled.
+
+The publisher requires all 12 outputs and fails before writing if any are
+missing or empty. It creates or leaves matching metadata unchanged, rejects
+drift by default, and reports secret names without logging values. It does
+not publish API keys, passwords, credentials, or other operator-managed
+secrets. The SQL path imports the versioned Stabu code reference data from
+`docs/database/reference/stabucodes.csv`; destructive migrations remain behind
+the separately protected `sql-migrations-destructive` Environment.
+
+### Existing combined customer foundation and runtime workflow
 
 The manual GitHub Actions workflow in
 `.github/workflows/customer-foundation-sql-runtime.yml` deploys one catalog
@@ -141,8 +175,8 @@ identity, and deployment parameters come from the non-secret
 Generated platform and customer resource IDs and URIs are deliberately not
 catalog fields; the workflow obtains them from Bicep deployment outputs.
 
-Before enabling the workflow, add the customer-specific automation values to
-the selected record in `config/customers.json`:
+Before enabling this combined workflow, add the LYHYT automation values to the
+selected record in `config/customers.json`:
 
 ```json
 "automation": {
@@ -159,8 +193,8 @@ longer repository-level GitHub variables. They are identifiers and runner
 labels, not secrets. The referenced client application must still have a
 matching GitHub OIDC federated credential and the required Azure RBAC access.
 
-For a subject-based federated credential, replace the old tag subject with the
-selected branch subject. For example, the `main` branch uses
+For this combined workflow's subject-based federated credential, replace the
+old tag subject with the selected branch subject. For example, the `main` branch uses
 `repo:ster-co/infrastructure-lyhyt:ref:refs/heads/main`. Update the federated
 credential on both the customer-tenant migration application and the LYHYT
 automation application. Because this workflow permits selecting different

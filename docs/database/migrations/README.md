@@ -8,8 +8,10 @@ is never granted migration permissions.
 ## Customer and environment catalog onboarding
 
 `config/customers.json` is the non-secret source of truth for workflow
-selection. Add a customer only when its customer-tenant foundation, runtime,
-network, and identity values are known and approved. A customer record has one
+selection. Add an enabled customer when its customer-tenant foundation,
+network, and migration identity values are known and approved. LYHYT runtime
+and automation values are required only when using a workflow that deploys
+the LYHYT runtime. A customer record has one
 unique `id`, its customer `tenantId`, one `migration` identity, and an
 `environments` object keyed by the supported environment names. The workflow
 accepts the environment string only when that key exists for the selected
@@ -18,10 +20,11 @@ cannot deploy.
 
 For each new customer/environment record:
 
-1. Confirm the customer tenant, subscription, private-network address space,
-   region, SQL administrator, and customer/runtime parameters with the
-   customer owner. Allocate a non-overlapping VNet range; never derive one
-   from the customer name or environment.
+1. Confirm the customer tenant, subscription, region, SQL administrator, and
+   customer-foundation parameters with the customer owner. Confirm private
+   network address space and runtime parameters separately before using a
+   workflow that deploys those resources. Never derive address space from the
+   customer name or environment.
 2. Add only non-secret tenant IDs, subscription IDs, resource IDs, endpoints,
    names, and deployment settings to the matching catalog record. Do not add
    passwords, client secrets, tokens, or connection strings.
@@ -229,21 +232,42 @@ no live SQL Server is part of the local test suite.
 
 ## Workflow operation
 
-The workflow is manually dispatched from a selected branch. It rejects tag
-dispatches before any deployment job runs. The operator inputs are:
+Two customer workflows are available. The additional
+`.github/workflows/customer-foundation.yml` workflow deploys only the customer
+foundation Bicep, customer foundation Key Vault configuration, and SQL
+migrations. It shares the customer/environment concurrency group with the
+existing combined workflow and does not use LYHYT tenant, platform, or runtime
+configuration. Its final gate requires successful foundation apply, Key Vault
+publication, and SQL completion.
+
+The customer-foundation-only workflow is manually dispatched from a selected
+branch and rejects tag dispatches before deployment. Its operator inputs are:
 
 - `customer_id`; and
 - `environment`; and
-- `release_version`, a numeric migration version such as `2026.09.30`; and
-- `bootstrap_runtime`, which defaults to `false` and reuses the existing LYHYT
-  runtime deployment outputs. Set it to `true` only for initial runtime
-  creation.
+- `release_version`, a numeric migration version such as `2026.10.07`.
 
-The customer subscription, tenant, location, migration application client ID,
-and other deployment-safe values are resolved from `config/customers.json`.
-They are not operator inputs. The execution order is foundation what-if,
-protected foundation apply, SQL preflight, migration plan, exactly one of the
-standard or destructive migration jobs, and finally the LYHYT runtime deploy.
+The selected customer tenant, subscription, location, migration identities,
+foundation parameters, and SQL runner label come from
+`config/customers.json`. `migration.applicationClientId` is the application
+client ID used for customer-tenant `azure/login`. `migration.principalObjectId`
+is the customer tenant's enterprise application/service principal **object
+ID**, used as the Key Vault RBAC principal; it is not the application/client
+ID. Foundation deployment permissions must include role-assignment creation
+for the customer foundation Key Vault.
+
+The execution order is foundation what-if, protected foundation apply,
+customer Key Vault publication and SQL preflight/plan in parallel, exactly
+one of the standard or protected destructive migration jobs, then the
+customer SQL completion gate. The foundation publisher requires all 12
+mapped outputs to be present and non-empty. It rejects drift by default and
+logs secret names only. Stabu code import follows the SQL migration command
+in either execution path.
+
+The existing `.github/workflows/customer-foundation-sql-runtime.yml` remains
+available and unchanged. It retains its `bootstrap_runtime` input and its
+runtime deployment path in the LYHYT tenant. That workflow continues to
+require the LYHYT automation catalog fields described below.
 
 The foundation apply passes only safe outputs to the SQL jobs:
 `sqlServerFqdn`, `sqlDatabaseName`, `sqlServerResourceId`, and
@@ -258,7 +282,7 @@ Configure these non-secret values in the selected customer record under
 
 | Variable | Purpose |
 | --- | --- |
-| `automation.customerSqlRunnerLabel` | Runner label for SQL preflight, plan, and apply jobs. |
+| `automation.customerSqlRunnerLabel` | Runner label for Key Vault publication and SQL preflight, plan, and apply jobs; it must reach customer private endpoints when enabled. |
 | `automation.lyhytAzureClientId` | LYHYT deployment application client ID. |
 | `automation.lyhytAzureTenantId` | LYHYT tenant ID. |
 | `automation.lyhytRuntimeSubscriptionId` | Subscription containing customer runtime resources. |
@@ -278,6 +302,10 @@ required workflow variable. The catalog contains only non-secret tenant,
 subscription, and application identifiers. The customer tenant must have the
 enterprise application and federated credential configured so the WIF identity
 can log in with the catalog migration application client ID.
+
+The `lyhytAzure*` and LYHYT subscription fields in this table are needed only
+by the existing combined workflow. The foundation-only workflow resolves just
+the customer tenant migration identity and `customerSqlRunnerLabel`.
 
 ## Key Vault bootstrap sequence
 

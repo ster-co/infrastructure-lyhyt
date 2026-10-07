@@ -1,4 +1,4 @@
-"""Guard the retired customer-foundation runtime configuration publisher."""
+"""Publish safe customer-foundation outputs to a customer Key Vault."""
 
 from __future__ import annotations
 
@@ -8,9 +8,21 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
 
 
-_OUTPUT_TO_SECRET: dict[str, str] = {}
-_DEFAULT_CUSTOMER_SECRETS: dict[str, str] = {}
-_ALLOWED_CUSTOMER_SECRETS: set[str] = set()
+_OUTPUT_TO_SECRET = {
+    "storageAccountName": "storage-account-name",
+    "blobEndpoint": "storage-blob-endpoint",
+    "sqlServerFqdn": "db-server-name",
+    "sqlDatabaseName": "db-name",
+    "searchServiceName": "azure-search-service-name",
+    "searchEndpoint": "azure-search-service-endpoint",
+    "aiEndpoint": "azure-openai-endpoint",
+    "documentIntelligenceEndpoint": "document-intelligence-endpoint",
+    "gpt5DeploymentName": "azure-openai-deployment-gpt5",
+    "gpt54DeploymentName": "azure-openai-deployment-gpt54",
+    "gpt5MiniDeploymentName": "azure-openai-deployment-gpt5-mini",
+    "textEmbedding3LargeDeploymentName": "azure-openai-deployment-text-embedding-3-large",
+}
+_ALLOWED_CUSTOMER_SECRETS = set(_OUTPUT_TO_SECRET.values())
 _KEY_VAULT_NAME = re.compile(r"^[a-z0-9-]{3,24}$")
 
 
@@ -132,17 +144,20 @@ def _output_value(raw_outputs: dict[str, object], output_name: str) -> str:
     if not isinstance(output, dict) or not isinstance(output.get("value"), str):
         raise ValueError(f"foundation output {output_name} must contain a string value")
     value = output["value"]
-    if not value:
+    if not value.strip():
         raise ValueError(f"foundation output {output_name} must not be empty")
     return value
 
 
 def extract_customer_configuration(raw_outputs: dict[str, object]) -> dict[str, str]:
-    """Return no runtime values; runtime ownership moved to the LYHYT vault."""
+    """Map every required safe foundation output to its customer vault secret."""
 
     if not isinstance(raw_outputs, dict):
         raise ValueError("deployment outputs must be an object")
-    return {}
+    return {
+        secret_name: _output_value(raw_outputs, output_name)
+        for output_name, secret_name in _OUTPUT_TO_SECRET.items()
+    }
 
 
 def publish_customer_configuration(

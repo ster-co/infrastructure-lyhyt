@@ -1,0 +1,638 @@
+name: Customer foundation
+
+run-name: Deploy customer foundation ${{ inputs.customer_id }}/${{ inputs.environment }} from ${{ github.ref_name }}
+
+concurrency:
+  group: customer-foundation-${{ inputs.customer_id }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: Customer catalog identifier
+        required: true
+        type: string
+      environment:
+        description: Customer environment
+        required: true
+        type: string
+      release_version:
+        description: Numeric migration release version, for example 2026.10.07
+        required: true
+        type: string
+
+env:
+  CATALOG_PATH: config/customers.json
+  FOUNDATION_TEMPLATE: infra/customer-foundation/main.bicep
+  FOUNDATION_MANIFEST: docs/database/migrations/manifest.json
+  RELEASE_VERSION: ${{ inputs.release_version }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.resolve.outputs.release_version }}
+      customer_tenant_id: ${{ steps.resolve.outputs.customer_tenant_id }}
+      customer_subscription_id: ${{ steps.resolve.outputs.customer_subscription_id }}
+      location: ${{ steps.resolve.outputs.location }}
+      region_code: ${{ steps.resolve.outputs.region_code }}
+      migration_application_client_id: ${{ steps.resolve.outputs.migration_application_client_id }}
+      migration_principal_object_id: ${{ steps.resolve.outputs.migration_principal_object_id }}
+      customer_sql_runner_label: ${{ steps.resolve.outputs.customer_sql_runner_label }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Reject non-branch refs
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "branch" ]]; then
+            exit 0
+          fi
+          echo "This workflow may run only from a branch selected in GitHub Actions." >&2
+          exit 1
+
+      - name: Resolve customer foundation catalog
+        id: resolve
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
+          python3 scripts/pipeline/resolve_foundation_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          values = {
+              "release_version": resolved["releaseVersion"],
+              "customer_tenant_id": resolved["customerTenantId"],
+              "customer_subscription_id": resolved["subscriptionId"],
+              "location": resolved["location"],
+              "region_code": resolved["regionCode"],
+              "migration_application_client_id": resolved["migration"]["applicationClientId"],
+              "migration_principal_object_id": resolved["migration"]["principalObjectId"],
+              "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+  customer_foundation_what_if:
+    needs: resolve
+    if: ${{ needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check GitHub OIDC availability
+        shell: bash
+        run: |
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || {
+            echo "GitHub OIDC endpoint unavailable; id-token permission was not granted"
+            exit 1
+          }
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || {
+            echo "GitHub OIDC token unavailable"
+            exit 1
+          }
+
+      - name: Log in to customer tenant for foundation what-if
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Validate customer foundation what-if
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
+          python3 scripts/pipeline/resolve_foundation_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["foundationParameters"])
+          parameters["runtimeAccessPrincipalId"] = ""
+          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
+          parameters["keyVaultPublisherPrincipalObjectId"] = resolved["migration"]["principalObjectId"]
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep lint --file "$FOUNDATION_TEMPLATE"
+          az bicep build --file "$FOUNDATION_TEMPLATE" --stdout > /dev/null
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub what-if --parameters "$PARAM_FILE" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$FOUNDATION_TEMPLATE"
+
+  customer_foundation_apply:
+    needs: [resolve, customer_foundation_what_if]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_what_if.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: customer-foundation-apply
+    outputs:
+      sqlServerFqdn: ${{ steps.apply.outputs.sqlServerFqdn }}
+      sqlDatabaseName: ${{ steps.apply.outputs.sqlDatabaseName }}
+      sqlServerResourceId: ${{ steps.apply.outputs.sqlServerResourceId }}
+      sqlDatabaseResourceId: ${{ steps.apply.outputs.sqlDatabaseResourceId }}
+      customerKeyVaultResourceId: ${{ steps.apply.outputs.customerKeyVaultResourceId }}
+      customerKeyVaultName: ${{ steps.apply.outputs.customerKeyVaultName }}
+      customerKeyVaultUri: ${{ steps.apply.outputs.customerKeyVaultUri }}
+      storageAccountName: ${{ steps.apply.outputs.storageAccountName }}
+      blobEndpoint: ${{ steps.apply.outputs.blobEndpoint }}
+      searchServiceName: ${{ steps.apply.outputs.searchServiceName }}
+      searchEndpoint: ${{ steps.apply.outputs.searchEndpoint }}
+      aiEndpoint: ${{ steps.apply.outputs.aiEndpoint }}
+      documentIntelligenceEndpoint: ${{ steps.apply.outputs.documentIntelligenceEndpoint }}
+      gpt5DeploymentName: ${{ steps.apply.outputs.gpt5DeploymentName }}
+      gpt54DeploymentName: ${{ steps.apply.outputs.gpt54DeploymentName }}
+      gpt5MiniDeploymentName: ${{ steps.apply.outputs.gpt5MiniDeploymentName }}
+      textEmbedding3LargeDeploymentName: ${{ steps.apply.outputs.textEmbedding3LargeDeploymentName }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for foundation apply
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Apply customer foundation and capture safe outputs
+        id: apply
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF_NAME: ${{ github.ref_name }}
+          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
+          DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          FOUNDATION_DEPLOYMENT_NAME: customer-foundation-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
+          trap 'rm -f "$PARAM_FILE"' EXIT
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
+          python3 scripts/pipeline/resolve_foundation_customer.py \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            --ref-name "$INPUT_REF_NAME" \
+            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+          python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          parameters = dict(resolved["foundationParameters"])
+          parameters["runtimeAccessPrincipalId"] = ""
+          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
+          parameters["keyVaultPublisherPrincipalObjectId"] = resolved["migration"]["principalObjectId"]
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
+          PY
+          az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
+          az deployment sub create --parameters "$PARAM_FILE" \
+            --name "$FOUNDATION_DEPLOYMENT_NAME" \
+            --location "$DEPLOYMENT_LOCATION" \
+            --template-file "$FOUNDATION_TEMPLATE" \
+            --query properties.outputs \
+            --output json > "$FOUNDATION_OUTPUTS_FILE"
+          python3 - "$FOUNDATION_OUTPUTS_FILE" "$GITHUB_OUTPUT" "$CUSTOMER_SUBSCRIPTION_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from scripts.pipeline.customer_configuration import extract_customer_configuration
+          from scripts.pipeline.deployment_outputs import (
+              extract_foundation_outputs,
+              validate_resource_id_subscription,
+          )
+
+          try:
+              raw_outputs = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              # Keep every customer-vault output mandatory despite optional shared extractor fields.
+              extract_customer_configuration(raw_outputs)
+              outputs = extract_foundation_outputs(raw_outputs)
+              safe = outputs.to_safe_dict()
+              validate_resource_id_subscription(
+                  safe["sqlServerResourceId"], sys.argv[3], "Microsoft.Sql"
+              )
+              validate_resource_id_subscription(
+                  safe["sqlDatabaseResourceId"], sys.argv[3], "Microsoft.Sql"
+              )
+              validate_resource_id_subscription(
+                  safe["customerKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
+              )
+          except (OSError, ValueError, json.JSONDecodeError):
+              raise SystemExit("customer foundation returned invalid safe outputs") from None
+
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, value in safe.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+  customer_key_vault_publish:
+    needs: [resolve, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for Key Vault publication
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Wait for customer Key Vault publisher role assignment
+        env:
+          CUSTOMER_KEY_VAULT_NAME: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultName }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if az keyvault secret list --vault-name "$CUSTOMER_KEY_VAULT_NAME" \
+              --query '[].name' --output tsv --only-show-errors >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Customer Key Vault data-plane access did not become available." >&2
+          exit 1
+
+      - name: Publish customer foundation configuration
+        env:
+          CUSTOMER_KEY_VAULT_NAME: ${{ needs.customer_foundation_apply.outputs.customerKeyVaultName }}
+          FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
+          STORAGE_ACCOUNT_NAME: ${{ needs.customer_foundation_apply.outputs.storageAccountName }}
+          BLOB_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.blobEndpoint }}
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SEARCH_SERVICE_NAME: ${{ needs.customer_foundation_apply.outputs.searchServiceName }}
+          SEARCH_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.searchEndpoint }}
+          AI_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.aiEndpoint }}
+          DOCUMENT_INTELLIGENCE_ENDPOINT: ${{ needs.customer_foundation_apply.outputs.documentIntelligenceEndpoint }}
+          GPT5_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt5DeploymentName }}
+          GPT54_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt54DeploymentName }}
+          GPT5_MINI_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.gpt5MiniDeploymentName }}
+          TEXT_EMBEDDING_3_LARGE_DEPLOYMENT_NAME: ${{ needs.customer_foundation_apply.outputs.textEmbedding3LargeDeploymentName }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$FOUNDATION_OUTPUTS_FILE"' EXIT
+          python3 - "$FOUNDATION_OUTPUTS_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          outputs = {
+              "storageAccountName": "STORAGE_ACCOUNT_NAME",
+              "blobEndpoint": "BLOB_ENDPOINT",
+              "sqlServerFqdn": "SQL_SERVER_FQDN",
+              "sqlDatabaseName": "SQL_DATABASE_NAME",
+              "searchServiceName": "SEARCH_SERVICE_NAME",
+              "searchEndpoint": "SEARCH_ENDPOINT",
+              "aiEndpoint": "AI_ENDPOINT",
+              "documentIntelligenceEndpoint": "DOCUMENT_INTELLIGENCE_ENDPOINT",
+              "gpt5DeploymentName": "GPT5_DEPLOYMENT_NAME",
+              "gpt54DeploymentName": "GPT54_DEPLOYMENT_NAME",
+              "gpt5MiniDeploymentName": "GPT5_MINI_DEPLOYMENT_NAME",
+              "textEmbedding3LargeDeploymentName": "TEXT_EMBEDDING_3_LARGE_DEPLOYMENT_NAME",
+          }
+          raw = {
+              output_name: {"value": os.environ.get(environment_name, "")}
+              for output_name, environment_name in outputs.items()
+          }
+          Path(sys.argv[1]).write_text(json.dumps(raw), encoding="utf-8")
+          PY
+          python3 scripts/pipeline/publish_customer_configuration.py \
+            --outputs "$FOUNDATION_OUTPUTS_FILE" \
+            --vault-name "$CUSTOMER_KEY_VAULT_NAME"
+
+  sql_migration_preflight:
+    needs: [resolve, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL preflight
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Validate SQL resource IDs from foundation apply
+        env:
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          try:
+              validate_resource_id_subscription(
+                  os.environ["SQL_SERVER_RESOURCE_ID"],
+                  os.environ["CUSTOMER_SUBSCRIPTION_ID"],
+                  "Microsoft.Sql",
+              )
+              validate_resource_id_subscription(
+                  os.environ["SQL_DATABASE_RESOURCE_ID"],
+                  os.environ["CUSTOMER_SUBSCRIPTION_ID"],
+                  "Microsoft.Sql",
+              )
+          except ValueError:
+              raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+
+      - name: Run mandatory Python, driver, token, and SQL preflight
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --preflight
+
+  sql_migration_plan:
+    needs: [resolve, customer_foundation_apply, sql_migration_preflight]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_preflight.result == 'success' }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
+    outputs:
+      has_destructive_migrations: ${{ steps.plan.outputs.has_destructive_migrations }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL migration plan
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Verify migration manifest
+        id: plan
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          VERIFICATION_FILE: ${{ runner.temp }}/migration-verification.json
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.verify_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --release-version "$RELEASE_VERSION" \
+            --output json > "$VERIFICATION_FILE"
+          python3 - "$VERIFICATION_FILE" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          value = result.get("hasDestructiveMigrations")
+          if not isinstance(value, bool):
+              raise SystemExit("migration verification did not return a destructive flag")
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              output.write(f"has_destructive_migrations={str(value).lower()}\n")
+          PY
+
+  sql_migration_execute:
+    needs: [resolve, customer_foundation_apply, sql_migration_plan]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'false' }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for SQL migrations
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Apply approved non-destructive SQL migrations
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID"
+          python3 -m scripts.sql.apply_stabucodes \
+            --csv-file docs/database/reference/stabucodes.csv \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --output json
+
+  sql_migration_execute_destructive:
+    needs: [resolve, customer_foundation_apply, sql_migration_plan]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'true' }}
+    runs-on: ${{ needs.resolve.outputs.customer_sql_runner_label }}
+    environment:
+      name: sql-migrations-destructive
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for approved destructive migrations
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Install and validate migration runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --requirement requirements.txt
+          python3 -c 'import azure.identity'
+
+      - name: Apply approved destructive SQL migrations
+        env:
+          SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          SQL_DATABASE_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+
+          from scripts.pipeline.deployment_outputs import validate_resource_id_subscription
+
+          for resource_id in (os.environ["SQL_SERVER_RESOURCE_ID"], os.environ["SQL_DATABASE_RESOURCE_ID"]):
+              try:
+                  validate_resource_id_subscription(
+                      resource_id, os.environ["CUSTOMER_SUBSCRIPTION_ID"], "Microsoft.Sql"
+                  )
+              except ValueError:
+                  raise SystemExit("SQL resource output subscription validation failed") from None
+          PY
+          python3 -m scripts.sql.apply_migrations \
+            --manifest "$FOUNDATION_MANIFEST" \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --release-version "$RELEASE_VERSION" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --allow-destructive
+          python3 -m scripts.sql.apply_stabucodes \
+            --csv-file docs/database/reference/stabucodes.csv \
+            --sql-server-fqdn "$SQL_SERVER_FQDN" \
+            --sql-database-name "$SQL_DATABASE_NAME" \
+            --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
+            --output json
+
+  customer_sql_complete:
+    needs: [resolve, sql_migration_preflight, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.sql_migration_preflight.result == 'success' && needs.sql_migration_plan.result == 'success' && ((needs.sql_migration_execute.result == 'success' && needs.sql_migration_execute_destructive.result == 'skipped') || (needs.sql_migration_execute.result == 'skipped' && needs.sql_migration_execute_destructive.result == 'success')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm customer SQL deployment completed
+        shell: bash
+        run: echo "Customer SQL migration path completed successfully."
+
+  customer_foundation_complete:
+    needs: [resolve, customer_foundation_apply, customer_key_vault_publish, customer_sql_complete]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_key_vault_publish.result == 'success' && needs.customer_sql_complete.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm customer foundation workflow completed
+        shell: bash
+        run: echo "Customer foundation, Key Vault publication, and SQL deployment completed successfully."

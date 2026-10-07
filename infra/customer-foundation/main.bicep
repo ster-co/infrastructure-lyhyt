@@ -25,6 +25,9 @@ param sqlEntraOnlyAuthentication bool = true
 // can be a customer-tenant service-principal object ID created through WIF.
 param runtimeAccessPrincipalId string = ''
 param enableSameTenantRuntimeKeyVaultRoleAssignment bool = false
+// Customer tenant's enterprise application/service principal object ID. This
+// is distinct from the application/client ID used by GitHub OIDC login.
+param keyVaultPublisherPrincipalObjectId string = ''
 
 param storageContainerNames array
 param aiDeployments array
@@ -118,6 +121,16 @@ module sameTenantRuntimeKeyVaultAccess './modules/key-vault-role-assignment.bice
     keyVaultResourceId: keyVault.outputs.keyVaultResourceId
     roleAssignmentName: guid(keyVault.outputs.keyVaultResourceId, runtimeAccessPrincipalId, keyVaultSecretsUserRoleDefinitionId)
     principalId: runtimeAccessPrincipalId
+  }
+}
+
+module keyVaultPublisherAccess './modules/key-vault-secrets-officer-role-assignment.bicep' = if (keyVaultPublisherPrincipalObjectId != '') {
+  name: 'assign-kv-publisher-${customerCode}-${environment}'
+  scope: customerResourceGroup
+  params: {
+    keyVaultResourceId: keyVault.outputs.keyVaultResourceId
+    roleAssignmentName: guid(keyVault.outputs.keyVaultResourceId, keyVaultPublisherPrincipalObjectId, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'))
+    principalObjectId: keyVaultPublisherPrincipalObjectId
   }
 }
 
