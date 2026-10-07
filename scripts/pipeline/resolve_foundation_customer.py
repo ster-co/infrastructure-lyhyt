@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from scripts.pipeline.resolve_customer import release_version_from_ref
+from scripts.sql.migration_common import latest_manifest_release_version
 
 
 _SAFE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -136,14 +136,13 @@ def resolve_foundation_customer(
     customer_id: str,
     environment: str,
     ref_type: str,
-    ref_name: str,
-    requested_release_version: str | None = None,
+    manifest_path: Path,
 ) -> dict[str, Any]:
     """Return only values needed to deploy customer foundation and SQL."""
 
-    release_version = release_version_from_ref(
-        ref_type, ref_name, requested_release_version
-    )
+    if ref_type != "branch":
+        raise ValueError("customer foundation workflow must be run from a branch")
+    release_version = latest_manifest_release_version(manifest_path)
     if not isinstance(customer_id, str) or _CUSTOMER_CODE.fullmatch(customer_id) is None:
         raise ValueError("customer_id must be a lowercase customer code of 2 to 12 characters")
     if environment not in ("tst", "acc", "prod"):
@@ -215,8 +214,7 @@ def main() -> int:
     parser.add_argument("--customer-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--ref-type", required=True)
-    parser.add_argument("--ref-name", required=True)
-    parser.add_argument("--release-version")
+    parser.add_argument("--manifest", required=True, type=Path)
     args = parser.parse_args()
     try:
         catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
@@ -225,8 +223,7 @@ def main() -> int:
             args.customer_id,
             args.environment,
             args.ref_type,
-            args.ref_name,
-            args.release_version,
+            args.manifest,
         )
         print(json.dumps(resolved, sort_keys=True))
     except (OSError, json.JSONDecodeError, ValueError) as error:

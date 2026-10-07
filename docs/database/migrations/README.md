@@ -223,12 +223,15 @@ The command reports `inserted`, `updated`, `unchanged`, and
 `missing_from_csv`, plus the missing code list. It uses the same Azure CLI
 token, customer SQL runner, private DNS, and ODBC Driver 18 requirements as
 the migration runner; it does not accept or print a password or connection
-string. To release a new CSV version, replace the versioned source file, run
-the focused tests and importer checks, and dispatch the workflow from the
-selected branch with the new release version. The
-existing workflow then applies only the source diff while leaving
-`0001_baseline.sql` unchanged. Unit tests use an in-memory recording adapter;
-no live SQL Server is part of the local test suite.
+string. To publish a changed CSV, update the source file on the branch you
+intend to deploy, run the focused tests and importer checks, and dispatch the
+customer-foundation-only workflow from that branch. It imports the CSV from
+the selected branch without a separate release-version input. The SQL
+migration version is derived from the highest `minimumRelease` in that
+branch's manifest; the combined foundation/runtime workflow continues to take
+an explicit release version. The importer applies only the source diff while
+leaving `0001_baseline.sql` unchanged. Unit tests use an in-memory recording
+adapter; no live SQL Server is part of the local test suite.
 
 ## Workflow operation
 
@@ -244,8 +247,15 @@ The customer-foundation-only workflow is manually dispatched from a selected
 branch and rejects tag dispatches before deployment. Its operator inputs are:
 
 - `customer_id`; and
-- `environment`; and
-- `release_version`, a numeric migration version such as `2026.10.07`.
+- `environment`.
+
+The workflow derives its internal migration version from the highest
+`minimumRelease` in `manifest.json` on the selected branch. This keeps branch
+selection as the source of both the infrastructure and SQL migration
+revision, while retaining the manifest's minimum-release checks and recording
+the derived version in the SQL migration ledger. The existing combined
+foundation/runtime workflow continues to require its explicit
+`release_version` input.
 
 The selected customer tenant, subscription, location, migration identities,
 foundation parameters, and SQL runner label come from

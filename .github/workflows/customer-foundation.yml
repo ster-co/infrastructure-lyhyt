@@ -21,16 +21,11 @@ on:
         description: Customer environment
         required: true
         type: string
-      release_version:
-        description: Numeric migration release version, for example 2026.10.07
-        required: true
-        type: string
 
 env:
   CATALOG_PATH: config/customers.json
   FOUNDATION_TEMPLATE: infra/customer-foundation/main.bicep
   FOUNDATION_MANIFEST: docs/database/migrations/manifest.json
-  RELEASE_VERSION: ${{ inputs.release_version }}
 
 jobs:
   resolve:
@@ -66,18 +61,16 @@ jobs:
           CUSTOMER_ID: ${{ inputs.customer_id }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
-          INPUT_REF_NAME: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
-          python3 scripts/pipeline/resolve_foundation_customer.py \
+          python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" \
-            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+            --manifest "$FOUNDATION_MANIFEST" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
@@ -131,7 +124,6 @@ jobs:
           CUSTOMER_ID: ${{ inputs.customer_id }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
-          INPUT_REF_NAME: ${{ github.ref_name }}
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
         shell: bash
         run: |
@@ -139,13 +131,12 @@ jobs:
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
           trap 'rm -f "$PARAM_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
-          python3 scripts/pipeline/resolve_foundation_customer.py \
+          python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" \
-            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+            --manifest "$FOUNDATION_MANIFEST" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
           import sys
@@ -208,7 +199,6 @@ jobs:
           CUSTOMER_ID: ${{ inputs.customer_id }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_REF_TYPE: ${{ github.ref_type }}
-          INPUT_REF_NAME: ${{ github.ref_name }}
           FOUNDATION_OUTPUTS_FILE: ${{ runner.temp }}/customer-foundation-outputs.json
           DEPLOYMENT_LOCATION: ${{ needs.resolve.outputs.location }}
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
@@ -219,13 +209,12 @@ jobs:
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
           trap 'rm -f "$PARAM_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
-          python3 scripts/pipeline/resolve_foundation_customer.py \
+          python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" \
-            --ref-name "$INPUT_REF_NAME" \
-            --release-version "$RELEASE_VERSION" > "$RESOLVED_FILE"
+            --manifest "$FOUNDATION_MANIFEST" > "$RESOLVED_FILE"
           python3 - "$RESOLVED_FILE" "$PARAM_FILE" <<'PY'
           import json
           import sys

@@ -135,9 +135,12 @@ foundation outputs into the customer foundation Key Vault, and runs SQL
 preflight, migration planning, and exactly one approved migration path. It
 does not authenticate to the LYHYT tenant, read shared-platform outputs,
 deploy LYHYT runtime resources, or publish to the LYHYT runtime vault. Its
-inputs are `customer_id`, `environment`, and numeric `release_version`; it
-rejects tag refs. The final workflow gate succeeds only if the foundation
-apply, customer-vault publication, and SQL path all succeed.
+inputs are `customer_id` and `environment`; select the branch in the GitHub
+Actions run form. It rejects tag refs. The effective SQL migration version is
+derived from the highest `minimumRelease` in the migration manifest on that
+branch, so the branch supplies both the infrastructure and migration revision.
+The final workflow gate succeeds only if the foundation apply, customer-vault
+publication, and SQL path all succeed.
 
 The workflow uses `migration.applicationClientId` as the `azure/login`
 `client-id`. `migration.principalObjectId` is the customer tenant's enterprise

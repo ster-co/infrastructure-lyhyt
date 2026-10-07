@@ -82,6 +82,27 @@ def _release_key(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
+def latest_manifest_release_version(manifest_path: Path) -> str:
+    """Return the highest minimumRelease declared by a migration manifest."""
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid migration manifest") from exc
+    if not isinstance(document, dict) or document.get("version") != 1:
+        raise ValueError("migration manifest version must be 1")
+    entries = document.get("migrations")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("migration manifest must contain at least one migration")
+
+    releases: list[tuple[tuple[int, ...], str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("migration entries must be objects")
+        minimum_release = entry.get("minimumRelease")
+        releases.append((_release_key(minimum_release), minimum_release))
+    return max(releases, key=lambda item: item[0])[1]
+
+
 def load_manifest(manifest_path: Path, repository_root: Path, release_version: str) -> list[Migration]:
     release_key = _release_key(release_version)
     try:
