@@ -129,7 +129,8 @@ jobs:
         run: |
           set -euo pipefail
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
-          trap 'rm -f "$PARAM_FILE"' EXIT
+          WHAT_IF_DEBUG_LOG="${RUNNER_TEMP}/what-if-debug.log"
+          trap 'rm -f "$PARAM_FILE" "$WHAT_IF_DEBUG_LOG"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
           python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
@@ -157,10 +158,10 @@ jobs:
           if ! az deployment sub what-if --parameters "$PARAM_FILE" \
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
-            --debug 2>"${RUNNER_TEMP}/what-if-debug.log"; then
-            grep -Ein -C 4 \
-              '715-123420|InvalidTemplateDeployment|Response content|innererror|additionalInfo|details' \
-              "${RUNNER_TEMP}/what-if-debug.log" || true
+            --debug 2>"$WHAT_IF_DEBUG_LOG"; then
+            grep -Ein \
+              '715-123420|InvalidTemplateDeployment|innererror|additionalInfo|details|ERROR:' \
+              "$WHAT_IF_DEBUG_LOG" || true
             exit 1
           fi
 
@@ -377,7 +378,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
 
       - name: Validate SQL resource IDs from foundation apply
         env:
@@ -446,7 +447,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
 
       - name: Verify migration manifest
         id: plan
@@ -511,7 +512,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
 
       - name: Apply approved non-destructive SQL migrations
         env:
@@ -573,7 +574,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
 
       - name: Apply approved destructive SQL migrations
         env:
