@@ -154,9 +154,15 @@ jobs:
           az bicep lint --file "$FOUNDATION_TEMPLATE"
           az bicep build --file "$FOUNDATION_TEMPLATE" --stdout > /dev/null
           az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
-          az deployment sub what-if --parameters "$PARAM_FILE" \
+          if ! az deployment sub what-if --parameters "$PARAM_FILE" \
             --location "$DEPLOYMENT_LOCATION" \
-            --template-file "$FOUNDATION_TEMPLATE"
+            --template-file "$FOUNDATION_TEMPLATE" \
+            --debug 2>"${RUNNER_TEMP}/what-if-debug.log"; then
+            rg -n -C 4 -i \
+              '715-123420|InvalidTemplateDeployment|Response content|innererror|additionalInfo|details' \
+              "${RUNNER_TEMP}/what-if-debug.log" || true
+            exit 1
+          fi
 
   customer_foundation_apply:
     needs: [resolve, customer_foundation_what_if]
