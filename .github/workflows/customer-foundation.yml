@@ -380,6 +380,9 @@ jobs:
           python3 -m pip install --requirement requirements.txt
           python3 -c 'import azure.identity, pyodbc'
 
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
+
       - name: Validate SQL resource IDs from foundation apply
         env:
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
@@ -514,6 +517,9 @@ jobs:
           python3 -m pip install --requirement requirements.txt
           python3 -c 'import azure.identity, pyodbc'
 
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
+
       - name: Apply approved non-destructive SQL migrations
         env:
           SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
@@ -575,6 +581,9 @@ jobs:
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
           python3 -c 'import azure.identity, pyodbc'
+
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
 
       - name: Apply approved destructive SQL migrations
         env:

@@ -1,0 +1,40 @@
+name: Set up SQL Server ODBC Driver 18
+description: Install and verify Microsoft ODBC Driver 18 on GitHub-hosted Linux runners
+runs:
+  using: composite
+  steps:
+    - name: Install Microsoft ODBC Driver 18 on GitHub-hosted Linux
+      if: ${{ runner.environment == 'github-hosted' && runner.os == 'Linux' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if python3 -c 'import pyodbc, sys; sys.exit(0 if "ODBC Driver 18 for SQL Server" in pyodbc.drivers() else 1)' 2>/dev/null; then
+          echo "ODBC Driver 18 for SQL Server is already installed."
+          exit 0
+        fi
+
+        source /etc/os-release
+        if [[ "$ID" != "ubuntu" ]]; then
+          echo "Automatic ODBC Driver 18 installation supports Ubuntu runners only." >&2
+          exit 1
+        fi
+
+        command -v curl >/dev/null
+        command -v gpg >/dev/null
+        sudo install -d -m 0755 /usr/share/keyrings
+        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+          | sudo gpg --dearmor --yes -o /usr/share/keyrings/microsoft-prod.gpg
+        curl -fsSL "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/prod.list" \
+          | sudo tee /etc/apt/sources.list.d/microsoft-prod.list >/dev/null
+        sudo apt-get update
+        sudo env ACCEPT_EULA=Y apt-get install --yes msodbcsql18
+
+        python3 - <<'PY'
+        import pyodbc
+
+        driver = "ODBC Driver 18 for SQL Server"
+        if driver not in pyodbc.drivers():
+            raise SystemExit(f"{driver} did not appear in pyodbc.drivers() after installation")
+        print(f"Found {driver}.")
+        PY
