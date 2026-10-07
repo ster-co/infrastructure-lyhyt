@@ -1,6 +1,7 @@
 param searchServiceName string
 param location string
 param tags object
+param enableSearchService bool = true
 
 @allowed([
   'Enabled'
@@ -8,7 +9,7 @@ param tags object
 ])
 param publicNetworkAccess string = 'Enabled'
 
-resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = {
+resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if (enableSearchService) {
   name: searchServiceName
   location: location
   tags: tags
@@ -32,6 +33,6 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = {
   }
 }
 
-output searchServiceResourceId string = searchService.id
-output searchServiceName string = searchService.name
-output searchEndpoint string = 'https://${searchService.name}.search.windows.net'
+output searchServiceResourceId string = enableSearchService ? searchService.id : ''
+output searchServiceName string = searchServiceName
+output searchEndpoint string = 'https://${searchServiceName}.search.windows.net'

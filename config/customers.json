@@ -25,6 +25,7 @@
             "sqlEntraAdministratorObjectId": "a44d87c6-1d28-4c34-b3aa-024caacebd3b",
             "sqlEntraAdministratorTenantId": "dc5495f6-68fa-44ba-af3e-ae5e88cf1d7b",
             "sqlEntraOnlyAuthentication": true,
+            "enableSearchService": false,
             "storageContainerNames": ["rag-files", "offerte-backups"],
             "aiDeployments": [
               {

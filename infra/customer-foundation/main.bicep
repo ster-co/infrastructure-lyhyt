@@ -20,6 +20,7 @@ param sqlEntraAdministratorObjectId string
 param sqlEntraAdministratorPrincipalType string = 'User'
 param sqlEntraAdministratorTenantId string
 param sqlEntraOnlyAuthentication bool = true
+param enableSearchService bool = true
 
 // Generic customer-side handoff. For the same-tenant pilot this is the
 // LYHYT runtime UAMI principal ID. In the future cross-tenant architecture it
@@ -160,6 +161,7 @@ module search './modules/search.bicep' = {
     location: location
     tags: commonTags
     publicNetworkAccess: publicNetworkAccess
+    enableSearchService: enableSearchService
   }
 }
 
