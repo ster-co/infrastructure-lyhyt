@@ -354,7 +354,7 @@ jobs:
           }
           Path(sys.argv[1]).write_text(json.dumps(raw), encoding="utf-8")
           PY
-          python3 scripts/pipeline/publish_customer_configuration.py \
+          python3 -m scripts.pipeline.publish_customer_configuration \
             --outputs "$FOUNDATION_OUTPUTS_FILE" \
             --vault-name "$CUSTOMER_KEY_VAULT_NAME"
 
