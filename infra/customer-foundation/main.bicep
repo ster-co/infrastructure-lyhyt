@@ -17,6 +17,7 @@ param customerTenantId string
 
 param sqlEntraAdministratorLogin string
 param sqlEntraAdministratorObjectId string
+param sqlEntraAdministratorPrincipalType string = 'User'
 param sqlEntraAdministratorTenantId string
 param sqlEntraOnlyAuthentication bool = true
 
@@ -144,6 +145,7 @@ module sql './modules/sql.bicep' = {
     tags: commonTags
     sqlEntraAdministratorLogin: sqlEntraAdministratorLogin
     sqlEntraAdministratorObjectId: sqlEntraAdministratorObjectId
+    sqlEntraAdministratorPrincipalType: sqlEntraAdministratorPrincipalType
     sqlEntraAdministratorTenantId: sqlEntraAdministratorTenantId
     sqlEntraOnlyAuthentication: sqlEntraOnlyAuthentication
     publicNetworkAccess: publicNetworkAccess
