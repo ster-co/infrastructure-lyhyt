@@ -158,7 +158,7 @@ jobs:
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
             --debug 2>"${RUNNER_TEMP}/what-if-debug.log"; then
-            rg -n -C 4 -i \
+            grep -Ein -C 4 \
               '715-123420|InvalidTemplateDeployment|Response content|innererror|additionalInfo|details' \
               "${RUNNER_TEMP}/what-if-debug.log" || true
             exit 1
