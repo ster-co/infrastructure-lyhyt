@@ -33,8 +33,41 @@ class SearchConfigurationError(RuntimeError):
 
 
 class SearchResponse:
-    def __init__(self, status: int):
+    def __init__(self, status: int, message: str | None = None):
         self.status = status
+        self.message = message
+
+
+def _search_error_message(body: bytes) -> str | None:
+    if not body:
+        return None
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+
+    messages: list[str] = []
+    if isinstance(payload, Mapping):
+        error = payload.get("error")
+        if isinstance(error, Mapping):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                messages.append(message)
+            details = error.get("details")
+            if isinstance(details, list):
+                for detail in details:
+                    if isinstance(detail, Mapping):
+                        detail_message = detail.get("message")
+                        if isinstance(detail_message, str) and detail_message.strip():
+                            messages.append(detail_message)
+    if not messages:
+        try:
+            messages.append(body.decode("utf-8"))
+        except UnicodeDecodeError:
+            return None
+
+    cleaned = " ".join(" ".join(messages).split())
+    return cleaned[:1000] if cleaned else None
 
 
 def _named_objects(configuration: Mapping[str, object], key: str) -> list[Mapping[str, object]]:
@@ -178,8 +211,9 @@ def should_apply_search_configuration(
 
 def _require_success(response: SearchResponse, method: str, collection: str, name: str) -> None:
     if not 200 <= response.status < 300:
+        detail = f": {response.message}" if response.message else ""
         raise SearchConfigurationError(
-            f"Search REST {method} {collection}/{name} returned HTTP {response.status}"
+            f"Search REST {method} {collection}/{name} returned HTTP {response.status}{detail}"
         )
 
 
@@ -302,7 +336,7 @@ class SearchRestClient:
                 if error.code in (401, 403) and attempt < self.retry_count:
                     time.sleep(self.retry_seconds)
                     continue
-                return SearchResponse(error.code)
+                return SearchResponse(error.code, _search_error_message(error.read(4096)))
             except (OSError, URLError, TimeoutError):
                 raise SearchConfigurationError(
                     f"Search REST {method} {collection}/{name} could not reach the service"

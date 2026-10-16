@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 from pathlib import Path
 
 
@@ -13,8 +16,9 @@ HELPER_PATH = ROOT / "scripts/pipeline/search_configuration_apply.py"
 
 
 class FakeResponse:
-    def __init__(self, status: int):
+    def __init__(self, status: int, message: str | None = None):
         self.status = status
+        self.message = message
 
 
 class FakeSearchApi:
@@ -83,6 +87,41 @@ def sample_deployment_outputs() -> dict:
 
 
 class SearchConfigurationApplyTests(unittest.TestCase):
+    def test_search_http_error_includes_service_validation_message(self) -> None:
+        module = load_apply_module(self)
+        with self.assertRaisesRegex(
+            module.SearchConfigurationError,
+            "Search rejected the index property 'invalidProperty'",
+        ):
+            module._require_success(
+                FakeResponse(400, "Search rejected the index property 'invalidProperty'"),
+                "PUT",
+                "indexes",
+                "pilot-projects",
+            )
+
+    def test_search_rest_client_reads_validation_message_from_http_error(self) -> None:
+        module = load_apply_module(self)
+        response_body = b'{"error":{"message":"Unknown index property."}}'
+        error = HTTPError(
+            "https://search-pilot.search.windows.net/indexes/pilot-projects",
+            400,
+            "Bad Request",
+            None,
+            io.BytesIO(response_body),
+        )
+        client = module.SearchRestClient(
+            "https://search-pilot.search.windows.net",
+            "2025-09-01",
+            token_provider=lambda: "test-token",
+            retry_count=0,
+        )
+        with patch.object(module, "urlopen", side_effect=error):
+            response = client.request("PUT", "indexes", "pilot-projects", {"name": "pilot-projects"})
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(response.message, "Unknown index property.")
+
     def test_search_configuration_runs_only_for_public_search_in_tst(self) -> None:
         module = load_apply_module(self)
         self.assertTrue(
