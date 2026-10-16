@@ -22,6 +22,7 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2026-05-15-preview' = 
     name: 'S0'
   }
   properties: {
+    restore: true
     allowProjectManagement: true
     customSubDomainName: aiServicesName
     networkAcls: {

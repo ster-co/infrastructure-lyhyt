@@ -182,8 +182,7 @@ jobs:
           set -euo pipefail
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
-          OUTPUTS_FILE="${RUNNER_TEMP}/customer-foundation-outputs.json"
-          trap 'rm -f "$PARAM_FILE" "$RESOLVED_FILE" "$OUTPUTS_FILE"' EXIT
+          trap 'rm -f "$PARAM_FILE" "$RESOLVED_FILE"' EXIT
           python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
@@ -206,6 +205,40 @@ jobs:
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
             --output none
+
+  customer_foundation_search_configuration:
+    name: Apply Azure AI Search configuration
+    needs: [resolve, customer_foundation_apply]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to customer tenant for Search configuration
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Apply Search JSON
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
+          FOUNDATION_DEPLOYMENT_NAME: customer-foundation-${{ inputs.customer_id }}-${{ inputs.environment }}-${{ needs.resolve.outputs.region_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
+          OUTPUTS_FILE="${RUNNER_TEMP}/customer-foundation-outputs.json"
+          trap 'rm -f "$RESOLVED_FILE" "$OUTPUTS_FILE"' EXIT
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" > "$RESOLVED_FILE"
           az deployment sub show \
             --name "$FOUNDATION_DEPLOYMENT_NAME" \
             --query properties.outputs \
@@ -216,8 +249,8 @@ jobs:
             --deployment-outputs-file "$OUTPUTS_FILE"
 
   customer_foundation_complete:
-    needs: [resolve, customer_foundation_apply]
-    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    needs: [resolve, customer_foundation_apply, customer_foundation_search_configuration]
+    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_foundation_search_configuration.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Confirm customer foundation workflow completed
