@@ -21,6 +21,11 @@ on:
         description: Customer environment
         required: true
         type: string
+      search_configuration_only:
+        description: Apply Search JSON using the existing foundation deployment outputs, without rerunning what-if or Bicep
+        required: false
+        default: false
+        type: boolean
 
 env:
   CATALOG_PATH: config/customers.json
@@ -86,7 +91,7 @@ jobs:
 
   customer_foundation_what_if:
     needs: resolve
-    if: ${{ needs.resolve.result == 'success' }}
+    if: ${{ needs.resolve.result == 'success' && inputs.search_configuration_only != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -155,7 +160,7 @@ jobs:
 
   customer_foundation_apply:
     needs: [resolve, customer_foundation_what_if]
-    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_what_if.result == 'success' }}
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && (inputs.search_configuration_only == true || needs.customer_foundation_what_if.result == 'success') }}
     runs-on: ubuntu-latest
     environment:
       name: customer-foundation-apply
@@ -171,6 +176,7 @@ jobs:
           subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
 
       - name: Apply customer foundation
+        if: ${{ inputs.search_configuration_only != true }}
         env:
           CUSTOMER_ID: ${{ inputs.customer_id }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
@@ -208,8 +214,8 @@ jobs:
 
   customer_foundation_search_configuration:
     name: Apply Azure AI Search configuration
-    needs: [resolve, customer_foundation_apply]
-    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
+    needs: [resolve, customer_foundation_what_if, customer_foundation_apply]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && (inputs.search_configuration_only == true || needs.customer_foundation_what_if.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -239,6 +245,15 @@ jobs:
             --customer-id "$CUSTOMER_ID" \
             --environment "$DEPLOYMENT_ENVIRONMENT" \
             --ref-type "$INPUT_REF_TYPE" > "$RESOLVED_FILE"
+          DEPLOYMENT_STATE="$(az deployment sub show \
+            --name "$FOUNDATION_DEPLOYMENT_NAME" \
+            --query properties.provisioningState \
+            --output tsv \
+            --only-show-errors)"
+          if [[ "$DEPLOYMENT_STATE" != "Succeeded" ]]; then
+            echo "The existing customer-foundation deployment is not successful; run the full workflow first." >&2
+            exit 1
+          fi
           az deployment sub show \
             --name "$FOUNDATION_DEPLOYMENT_NAME" \
             --query properties.outputs \
@@ -249,8 +264,8 @@ jobs:
             --deployment-outputs-file "$OUTPUTS_FILE"
 
   customer_foundation_complete:
-    needs: [resolve, customer_foundation_apply, customer_foundation_search_configuration]
-    if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_foundation_search_configuration.result == 'success' }}
+    needs: [resolve, customer_foundation_what_if, customer_foundation_apply, customer_foundation_search_configuration]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_foundation_search_configuration.result == 'success' && (inputs.search_configuration_only == true || needs.customer_foundation_what_if.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: Confirm customer foundation workflow completed
