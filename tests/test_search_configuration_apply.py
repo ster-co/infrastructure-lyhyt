@@ -73,7 +73,59 @@ def sample_configuration() -> dict:
     }
 
 
+def sample_deployment_outputs() -> dict:
+    return {
+        "searchEndpoint": "https://search-pilot-tst-swec.search.windows.net",
+        "sqlDatabaseResourceId": "/subscriptions/11111111/resourceGroups/rg-pilot/providers/Microsoft.Sql/servers/sql-pilot/databases/sqldb-pilot-tst",
+        "aiEndpoint": "https://ai-pilot-tst-swec.cognitiveservices.azure.com/",
+        "textEmbedding3LargeDeploymentName": "text-embedding-3-large",
+    }
+
+
 class SearchConfigurationApplyTests(unittest.TestCase):
+    def test_search_configuration_runs_only_for_public_search_in_tst(self) -> None:
+        module = load_apply_module(self)
+        self.assertTrue(
+            module.should_apply_search_configuration(
+                "tst", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}
+            )
+        )
+        for environment, parameters in (
+            ("acc", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}),
+            ("tst", {"enableSearchService": False, "publicNetworkAccess": "Enabled"}),
+            ("tst", {"enableSearchService": True, "publicNetworkAccess": "Disabled"}),
+        ):
+            with self.subTest(environment=environment, parameters=parameters):
+                self.assertFalse(module.should_apply_search_configuration(environment, parameters))
+
+    def test_builds_customer_configuration_from_json_templates_and_outputs(self) -> None:
+        module = load_apply_module(self)
+        configuration = module.build_search_configuration(
+            ROOT / "infra/customer-foundation/search",
+            "Pilot-Co",
+            "tst",
+            sample_deployment_outputs(),
+        )
+
+        self.assertEqual(
+            [item["name"] for item in configuration["indexes"]],
+            ["pilot-co-projects", "pilot-co-sharepoint-tst"],
+        )
+        self.assertEqual(
+            configuration["dataSources"][0]["credentials"]["connectionString"],
+            "ResourceId=/subscriptions/11111111/resourceGroups/rg-pilot/providers/Microsoft.Sql/servers/sql-pilot/databases/sqldb-pilot-tst;",
+        )
+        skill = configuration["skillsets"][0]["skills"][0]
+        self.assertEqual(
+            skill["resourceUri"], "https://ai-pilot-tst-swec.cognitiveservices.azure.com"
+        )
+        self.assertEqual(skill["deploymentId"], "text-embedding-3-large")
+        self.assertEqual(skill["apiKey"], "__ENTER_IN_AZURE_PORTAL__")
+        indexer = configuration["indexers"][0]
+        self.assertEqual(indexer["dataSourceName"], "azuresql-pilot-co-datasource")
+        self.assertEqual(indexer["targetIndexName"], "pilot-co-projects")
+        self.assertTrue(indexer["disabled"])
+
     def test_first_apply_creates_objects_in_dependency_order(self) -> None:
         module = load_apply_module(self)
         api = FakeSearchApi()

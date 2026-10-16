@@ -20,6 +20,7 @@ param sqlEntraAdministratorPrincipalType string = 'User'
 param sqlEntraAdministratorTenantId string
 param sqlEntraOnlyAuthentication bool = true
 param enableSearchService bool = true
+param searchConfigurationPrincipalObjectId string = ''
 
 param storageContainerNames array
 param aiDeployments array
@@ -99,6 +100,8 @@ module search './modules/search.bicep' = {
     tags: commonTags
     publicNetworkAccess: publicNetworkAccess
     enableSearchService: enableSearchService
+    enableSearchConfiguration: environment == 'tst' && publicNetworkAccess == 'Enabled'
+    searchConfigurationPrincipalObjectId: searchConfigurationPrincipalObjectId
   }
 }
 
@@ -112,22 +115,6 @@ module ai './modules/ai.bicep' = {
     tags: commonTags
     deployments: aiDeployments
     publicNetworkAccess: publicNetworkAccess
-  }
-}
-
-module searchConfiguration './modules/search-configuration.bicep' = if (enableSearchService && environment == 'tst' && publicNetworkAccess == 'Enabled') {
-  name: 'customer-foundation-search-configuration'
-  scope: customerResourceGroup
-  params: {
-    searchServiceName: search.outputs.searchServiceName
-    searchEndpoint: search.outputs.searchEndpoint
-    customerCode: customerCode
-    environment: environment
-    location: location
-    tags: commonTags
-    sqlDatabaseResourceId: sql.outputs.sqlDatabaseResourceId
-    azureOpenAiEndpoint: ai.outputs.aiEndpoint
-    embeddingDeploymentName: ai.outputs.deploymentNames[3]
   }
 }
 

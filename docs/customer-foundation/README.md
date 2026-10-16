@@ -49,18 +49,22 @@ subject:
 repo:ster-co/infrastructure-lyhyt:environment:customer-foundation-apply
 ```
 
-Do not use a broad repository-wide subject. `migration.principalObjectId`
-remains part of the catalog for the combined SQL migration workflow; the
-standalone foundation workflow does not create a Key Vault role assignment.
+Do not use a broad repository-wide subject. `migration.principalObjectId` is
+the customer-tenant service principal object ID. The standalone workflow passes
+it to Bicep, which grants that identity Search Service Contributor on the
+Search service for TST when Search is enabled and public network access is
+enabled. The combined SQL migration workflow also uses this catalog value for
+its SQL permissions.
 
-Grant the customer-tenant deployment service principal the `Contributor` role
-on the customer subscription. When Search is enabled for TST with public
-network access, the foundation also assigns the Search Service Contributor role
-to a configuration identity. The deployment service principal therefore needs
-permission to create role assignments at the Search service scope, such as
-`Role Based Access Control Administrator`, `User Access Administrator`, or
-`Owner`. Protect the `customer-foundation-apply` GitHub Environment and require
-approval from the customer deployment reviewers.
+Grant the customer-tenant deployment service principal `Contributor` and
+`Role Based Access Control Administrator` at the customer subscription (or
+equivalent scopes covering the resources being deployed). Bicep uses the
+deployment service principal's role-assignment permission to grant the workflow
+identity `Search Service Contributor` on the newly created TST Search service
+when public network access is enabled. Any conditions on the RBAC Administrator
+assignment must allow this role assignment. Protect the
+`customer-foundation-apply` GitHub Environment and require approval from the
+customer deployment reviewers.
 
 ## Customer catalog parameters
 
@@ -120,11 +124,13 @@ that design.
   applying migrations. Use the combined workflow for SQL migrations and
   Stabu reference-data import.
 - **Azure AI Search:** The service is created when `enableSearchService` is
-  true. Bicep configures API-key or Entra authentication and enables the
-  service's system-assigned identity. For TST with public network access
-  enabled, it creates the Projects and SharePoint indexes, SQL data source,
-  embedding skillset, and a disabled SQL indexer. The deployment returns the
-  endpoint and service name, but not service keys.
+  true. Bicep configures API-key or Entra authentication, enables the service's
+  system-assigned identity. For TST with public network access enabled, Bicep
+  grants the workflow identity Search Service Contributor. After Bicep
+  succeeds, the GitHub Actions runner uses its Entra token to apply the
+  Projects and SharePoint indexes, SQL data source, embedding skillset, and a
+  disabled SQL indexer. The deployment returns the endpoint and service name,
+  but not service keys.
 - **Azure AI Services:** The deployment returns the account endpoint and
   configured model deployment names. It does not return resource keys.
 - **Document Intelligence:** The deployment returns the endpoint, not resource
@@ -132,11 +138,13 @@ that design.
 
 ## Azure AI Search TST setup
 
-Bicep applies Search data-plane configuration only when the environment is
-`tst`, Search is enabled, and `publicNetworkAccess` is `Enabled`. ACC and PROD
-Search objects are deferred until the deployment path can reach their private
-endpoints. The SharePoint index is only a schema; no SharePoint data source,
-skillset, or indexer is defined.
+The customer-foundation workflow applies Search data-plane configuration after
+the Bicep deployment only when the environment is `tst`, Search is enabled,
+and `publicNetworkAccess` is `Enabled`. The runner calls the Search REST API
+using the same customer deployment identity after Bicep grants it Search
+Service Contributor. ACC and PROD Search objects are deferred until the
+deployment path can reach their private endpoints. The SharePoint index is
+only a schema; no SharePoint data source, skillset, or indexer is defined.
 
 The SQL data source uses the Search service's system-assigned identity and the
 database resource ID. After the SQL baseline migration creates
@@ -146,7 +154,7 @@ in that database. Replace `__SEARCH_SERVICE_NAME__` with the deployed Search
 service name. This creates the external database user and grants it `SELECT`
 on the view. SQL Entra-only authentication remains enabled by default.
 
-The embedding skillset is initially created with the explicit
+The workflow creates the embedding skillset with the explicit
 `__ENTER_IN_AZURE_PORTAL__` placeholder as its API key, and the indexer is
 created disabled. Before enabling the indexer:
 
@@ -157,8 +165,10 @@ created disabled. Before enabling the indexer:
 2. Complete the SQL view grant above.
 3. Open `sql-<customerCode>-indexer`, enable it, and run it.
 
-On later Bicep applies, indexes and the SQL data source are updated. An
+On later workflow runs, indexes and the SQL data source are updated. An
 existing skillset or indexer is left as-is, preserving the portal-entered key
 and the indexer's enabled state. Make later changes to those two objects in the
 portal. The first apply creates the indexer disabled, so it cannot run before
-the API key and SQL permission are ready.
+the API key and SQL permission are ready. The workflow retries Search
+authorization briefly after the RBAC assignment to allow permission
+propagation.

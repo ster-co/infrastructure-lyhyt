@@ -1,9 +1,9 @@
-"""Apply Azure AI Search data-plane objects from a Bicep deployment script."""
+"""Apply Azure AI Search data-plane objects from the customer-foundation workflow."""
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -19,6 +19,13 @@ SEARCH_TOKEN_RESOURCE = "https://search.azure.com/"
 DEFAULT_API_VERSION = "2025-09-01"
 AUTH_RETRY_COUNT = 12
 AUTH_RETRY_SECONDS = 15
+TEMPLATE_FILES = {
+    "projectsIndex": "projects-index.json",
+    "sharePointIndex": "sharepoint-index.json",
+    "sqlDataSource": "sql-data-source.json",
+    "sqlSkillset": "sql-vector-skillset.json",
+    "sqlIndexer": "sql-indexer.json",
+}
 
 
 class SearchConfigurationError(RuntimeError):
@@ -58,6 +65,115 @@ def _validate_portal_key_placeholder(skillsets: list[Mapping[str, object]]) -> N
                 raise SearchConfigurationError(
                     "Search skillset JSON must keep the API key as the portal placeholder"
                 )
+
+
+def _run_az(arguments: list[str], failure_message: str) -> str:
+    try:
+        result = subprocess.run(
+            ["az", *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        raise SearchConfigurationError(failure_message) from None
+    return result.stdout.strip()
+
+
+def _replace_placeholders(value: object, replacements: Mapping[str, str]) -> object:
+    if isinstance(value, str):
+        for placeholder, replacement in replacements.items():
+            value = value.replace(placeholder, replacement)
+        return value
+    if isinstance(value, list):
+        return [_replace_placeholders(item, replacements) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key: _replace_placeholders(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _deployment_output(outputs: Mapping[str, object], name: str) -> str:
+    raw = outputs.get(name)
+    if isinstance(raw, Mapping):
+        raw = raw.get("value")
+    if not isinstance(raw, str) or not raw.strip():
+        raise SearchConfigurationError(
+            f"Bicep deployment output {name!r} is missing or invalid"
+        )
+    return raw
+
+
+def build_search_configuration(
+    templates_dir: Path,
+    customer_code: str,
+    environment: str,
+    deployment_outputs: Mapping[str, object],
+) -> dict[str, object]:
+    """Fill checked-in JSON templates with customer values and Bicep outputs."""
+    if not isinstance(deployment_outputs, Mapping):
+        raise SearchConfigurationError("Bicep deployment outputs must be an object")
+
+    search_endpoint = _deployment_output(deployment_outputs, "searchEndpoint")
+    sql_database_resource_id = _deployment_output(
+        deployment_outputs, "sqlDatabaseResourceId"
+    )
+    azure_openai_endpoint = _deployment_output(deployment_outputs, "aiEndpoint").rstrip("/")
+    embedding_deployment = _deployment_output(
+        deployment_outputs, "textEmbedding3LargeDeploymentName"
+    )
+    replacements = {
+        "__CUSTOMER_CODE__": customer_code.lower(),
+        "__ENVIRONMENT__": environment,
+        "__SQL_DATABASE_RESOURCE_ID__": sql_database_resource_id,
+        "__AZURE_OPENAI_ENDPOINT__": azure_openai_endpoint,
+        "__EMBEDDING_DEPLOYMENT__": embedding_deployment,
+    }
+
+    templates: dict[str, object] = {}
+    for key, filename in TEMPLATE_FILES.items():
+        try:
+            template = json.loads((templates_dir / filename).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise SearchConfigurationError(
+                f"Search JSON template {filename!r} could not be loaded"
+            ) from None
+        if not isinstance(template, Mapping):
+            raise SearchConfigurationError(f"Search JSON template {filename!r} must be an object")
+        templates[key] = _replace_placeholders(template, replacements)
+
+    projects_index = templates["projectsIndex"]
+    sharepoint_index = templates["sharePointIndex"]
+    data_source = templates["sqlDataSource"]
+    skillset = templates["sqlSkillset"]
+    indexer = templates["sqlIndexer"]
+    assert isinstance(projects_index, Mapping)
+    assert isinstance(sharepoint_index, Mapping)
+    assert isinstance(data_source, Mapping)
+    assert isinstance(skillset, Mapping)
+    assert isinstance(indexer, Mapping)
+
+    if not search_endpoint.startswith("https://"):
+        raise SearchConfigurationError("Search endpoint must use HTTPS")
+    return {
+        "indexes": [projects_index, sharepoint_index],
+        "dataSources": [data_source],
+        "skillsets": [skillset],
+        "indexers": [indexer],
+    }
+
+
+def should_apply_search_configuration(
+    environment: object,
+    foundation_parameters: Mapping[str, object],
+) -> bool:
+    return (
+        environment == "tst"
+        and foundation_parameters.get("enableSearchService", True) is True
+        and foundation_parameters.get("publicNetworkAccess") == "Enabled"
+    )
 
 
 def _require_success(response: SearchResponse, method: str, collection: str, name: str) -> None:
@@ -119,37 +235,6 @@ def apply_search_configuration(
         _create_once(request, "skillsets", skillset, emit)
     for indexer in indexers:
         _create_once(request, "indexers", indexer, emit)
-
-
-def _run_az(arguments: list[str], failure_message: str) -> str:
-    try:
-        result = subprocess.run(
-            ["az", *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        raise SearchConfigurationError(failure_message) from None
-    return result.stdout.strip()
-
-
-def _login_with_user_assigned_identity(client_id: str) -> None:
-    if not client_id:
-        raise SearchConfigurationError("Search configuration identity client ID is missing")
-    _run_az(
-        [
-            "login",
-            "--identity",
-            "--username",
-            client_id,
-            "--allow-no-subscriptions",
-            "--only-show-errors",
-            "--output",
-            "none",
-        ],
-        "Azure CLI could not log in with the Search configuration identity",
-    )
 
 
 def _get_search_token() -> str:
@@ -226,22 +311,42 @@ class SearchRestClient:
 
 
 def main() -> int:
-    try:
-        endpoint = os.environ["SEARCH_ENDPOINT"]
-        configuration_json = os.environ.get("SEARCH_CONFIGURATION_JSON")
-        if configuration_json is None:
-            configuration_path = Path(os.environ["SEARCH_CONFIGURATION_FILE"])
-            configuration_json = configuration_path.read_text(encoding="utf-8")
-        configuration = json.loads(configuration_json)
-        api_version = os.environ.get("SEARCH_API_VERSION", DEFAULT_API_VERSION)
-        identity_client_id = os.environ["SEARCH_CONFIG_IDENTITY_CLIENT_ID"]
-        if not endpoint.startswith("https://"):
-            raise SearchConfigurationError("Search endpoint must use HTTPS")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--resolved-file", required=True, type=Path)
+    parser.add_argument("--deployment-outputs-file", required=True, type=Path)
+    args = parser.parse_args()
 
-        _login_with_user_assigned_identity(identity_client_id)
-        client = SearchRestClient(endpoint, api_version)
+    try:
+        resolved = json.loads(args.resolved_file.read_text(encoding="utf-8"))
+        if not isinstance(resolved, Mapping):
+            raise SearchConfigurationError("Resolved customer configuration must be an object")
+        foundation = resolved.get("foundationParameters")
+        if not isinstance(foundation, Mapping):
+            raise SearchConfigurationError("Resolved foundation parameters are missing")
+        if not should_apply_search_configuration(resolved.get("environment"), foundation):
+            print(
+                "Skipping Search JSON apply; it is enabled only for TST with Search and public access enabled."
+            )
+            return 0
+
+        customer_code = resolved.get("customerId")
+        environment = resolved.get("environment")
+        if not isinstance(customer_code, str) or not isinstance(environment, str):
+            raise SearchConfigurationError("Resolved customer code or environment is missing")
+
+        outputs = json.loads(
+            args.deployment_outputs_file.read_text(encoding="utf-8")
+        )
+        configuration = build_search_configuration(
+            Path("infra/customer-foundation/search"),
+            customer_code,
+            environment,
+            outputs,
+        )
+        endpoint = _deployment_output(outputs, "searchEndpoint")
+        client = SearchRestClient(endpoint, DEFAULT_API_VERSION)
         apply_search_configuration(configuration, client.request)
-    except (KeyError, json.JSONDecodeError, SearchConfigurationError) as error:
+    except (OSError, json.JSONDecodeError, SearchConfigurationError) as error:
         print(f"Search configuration apply failed: {error}", file=sys.stderr)
         return 1
     return 0

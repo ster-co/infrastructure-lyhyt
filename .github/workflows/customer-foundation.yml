@@ -181,8 +181,9 @@ jobs:
         run: |
           set -euo pipefail
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
-          trap 'rm -f "$PARAM_FILE"' EXIT
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
+          OUTPUTS_FILE="${RUNNER_TEMP}/customer-foundation-outputs.json"
+          trap 'rm -f "$PARAM_FILE" "$RESOLVED_FILE" "$OUTPUTS_FILE"' EXIT
           python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
@@ -205,6 +206,14 @@ jobs:
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
             --output none
+          az deployment sub show \
+            --name "$FOUNDATION_DEPLOYMENT_NAME" \
+            --query properties.outputs \
+            --output json \
+            --only-show-errors > "$OUTPUTS_FILE"
+          python3 -m scripts.pipeline.search_configuration_apply \
+            --resolved-file "$RESOLVED_FILE" \
+            --deployment-outputs-file "$OUTPUTS_FILE"
 
   customer_foundation_complete:
     needs: [resolve, customer_foundation_apply]

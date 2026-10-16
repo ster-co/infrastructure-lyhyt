@@ -131,6 +131,9 @@ def resolve_foundation_customer(
     application_client_id = _uuid(
         migration.get("applicationClientId"), "migration.applicationClientId"
     )
+    principal_object_id = _uuid(
+        migration.get("principalObjectId"), "migration.principalObjectId"
+    )
 
     environments = customer.get("environments")
     if not isinstance(environments, dict) or environment not in environments:
@@ -152,6 +155,7 @@ def resolve_foundation_customer(
             "environment": environment,
             "location": location,
             "regionCode": region_code,
+            "searchConfigurationPrincipalObjectId": principal_object_id,
         }
     )
 
@@ -162,7 +166,10 @@ def resolve_foundation_customer(
         "subscriptionId": subscription_id,
         "location": location,
         "regionCode": region_code,
-        "migration": {"applicationClientId": application_client_id},
+        "migration": {
+            "applicationClientId": application_client_id,
+            "principalObjectId": principal_object_id,
+        },
         "foundationParameters": foundation,
     }
 
