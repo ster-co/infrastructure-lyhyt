@@ -112,13 +112,6 @@ that design.
    resources, and Document Intelligence resource in the generated foundation
    resource group.
 
-To retry Search JSON after a successful foundation deployment, set the
-`search_configuration_only` workflow input to `true`. This skips what-if and
-Bicep and uses the saved outputs from the existing deployment name. The
-protected `customer-foundation-apply` Environment approval still applies. Use
-this only when the foundation deployment for that customer, environment, and
-region has already succeeded.
-
 ## Resource values
 
 - **Storage:** The account name and Blob endpoint are deployment outputs.

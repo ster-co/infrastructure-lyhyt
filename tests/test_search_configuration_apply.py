@@ -87,32 +87,6 @@ def sample_deployment_outputs() -> dict:
 
 
 class SearchConfigurationApplyTests(unittest.TestCase):
-    def test_workflow_has_a_search_only_path_using_existing_deployment_outputs(self) -> None:
-        workflow = (ROOT / ".github/workflows/customer-foundation.yml").read_text(
-            encoding="utf-8"
-        )
-        dispatch = workflow.split("  workflow_dispatch:", 1)[1].split("\njobs:", 1)[0]
-        self.assertIn("search_configuration_only:", dispatch)
-        self.assertIn("type: boolean", dispatch)
-        self.assertIn("default: false", dispatch)
-
-        what_if_job = workflow.split("  customer_foundation_what_if:", 1)[1].split(
-            "\n  customer_foundation_apply:", 1
-        )[0]
-        apply_job = workflow.split("  customer_foundation_apply:", 1)[1].split(
-            "\n  customer_foundation_search_configuration:", 1
-        )[0]
-        search_job = workflow.split("  customer_foundation_search_configuration:", 1)[1].split(
-            "\n  customer_foundation_complete:", 1
-        )[0]
-        self.assertIn("inputs.search_configuration_only != true", what_if_job)
-        self.assertIn("inputs.search_configuration_only != true", apply_job)
-        self.assertIn("inputs.search_configuration_only == true", search_job)
-        self.assertIn("az deployment sub show", search_job)
-        self.assertIn("properties.provisioningState", search_job)
-        self.assertIn('!= "Succeeded"', search_job)
-        self.assertIn("--deployment-outputs-file", search_job)
-
     def test_search_http_error_includes_service_validation_message(self) -> None:
         module = load_apply_module(self)
         with self.assertRaisesRegex(
