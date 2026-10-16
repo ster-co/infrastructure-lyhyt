@@ -1,6 +1,5 @@
 {
   "name": "__CUSTOMER_CODE__-projects",
-  "purviewEnabled": false,
   "fields": [
     { "name": "project_id", "type": "Edm.String", "searchable": true, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": true, "key": true, "synonymMaps": [] },
     { "name": "content", "type": "Edm.String", "searchable": true, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": true, "key": false, "synonymMaps": [] },

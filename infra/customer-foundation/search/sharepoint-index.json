@@ -1,6 +1,5 @@
 {
   "name": "__CUSTOMER_CODE__-sharepoint-__ENVIRONMENT__",
-  "purviewEnabled": false,
   "fields": [
     { "name": "id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": true, "synonymMaps": [] },
     { "name": "document_id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
