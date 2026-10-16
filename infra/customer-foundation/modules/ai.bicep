@@ -3,6 +3,7 @@ param documentIntelligenceName string
 param location string
 param tags object
 param deployments array
+param restoreAiServices bool = false
 
 @allowed([
   'Enabled'
@@ -22,7 +23,7 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2026-05-15-preview' = 
     name: 'S0'
   }
   properties: {
-    restore: true
+    restore: restoreAiServices
     allowProjectManagement: true
     customSubDomainName: aiServicesName
     networkAcls: {

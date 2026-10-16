@@ -24,6 +24,7 @@ param searchConfigurationPrincipalObjectId string = ''
 
 param storageContainerNames array
 param aiDeployments array
+param restoreAiServices bool = false
 param additionalTags object = {}
 
 @allowed([
@@ -114,6 +115,7 @@ module ai './modules/ai.bicep' = {
     location: location
     tags: commonTags
     deployments: aiDeployments
+    restoreAiServices: restoreAiServices
     publicNetworkAccess: publicNetworkAccess
   }
 }

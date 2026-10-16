@@ -81,6 +81,7 @@ The resolver requires:
 | `sqlEntraOnlyAuthentication` | Boolean; normally `true`. |
 | `storageContainerNames` | Array of approved blob container names. |
 | `aiDeployments` | Approved model deployment configurations and capacities. |
+| `restoreAiServices` | Optional boolean; set to `true` only when restoring a recoverable soft-deleted Azure AI Services account. Defaults to `false` for normal creation. |
 | `additionalTags` | Customer and environment metadata for Azure resource tags. |
 | `publicNetworkAccess` | `Enabled` or `Disabled`, consistent with the network design. |
 | `storageNetworkDefaultAction` | `Allow` or `Deny`, consistent with the Storage network design. |
