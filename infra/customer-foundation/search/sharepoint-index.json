@@ -33,7 +33,6 @@
     "configurations": [
       {
         "name": "semantic-config",
-        "flightingOptIn": false,
         "rankingOrder": "BoostedRerankerScore",
         "prioritizedFields": {
           "titleField": { "fieldName": "chunk" },

@@ -21,7 +21,6 @@
     "configurations": [
       {
         "name": "sql-semantic-config",
-        "flightingOptIn": false,
         "rankingOrder": "BoostedRerankerScore",
         "prioritizedFields": {
           "prioritizedContentFields": [{ "fieldName": "content" }],
