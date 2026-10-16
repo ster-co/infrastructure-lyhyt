@@ -115,6 +115,22 @@ module ai './modules/ai.bicep' = {
   }
 }
 
+module searchConfiguration './modules/search-configuration.bicep' = if (enableSearchService && environment == 'tst' && publicNetworkAccess == 'Enabled') {
+  name: 'customer-foundation-search-configuration'
+  scope: customerResourceGroup
+  params: {
+    searchServiceName: search.outputs.searchServiceName
+    searchEndpoint: search.outputs.searchEndpoint
+    customerCode: customerCode
+    environment: environment
+    location: location
+    tags: commonTags
+    sqlDatabaseResourceId: sql.outputs.sqlDatabaseResourceId
+    azureOpenAiEndpoint: ai.outputs.aiEndpoint
+    embeddingDeploymentName: ai.outputs.deploymentNames[3]
+  }
+}
+
 output customerResourceGroupName string = customerResourceGroup.name
 output storageAccountResourceId string = storage.outputs.storageAccountResourceId
 output storageAccountName string = storage.outputs.storageAccountName

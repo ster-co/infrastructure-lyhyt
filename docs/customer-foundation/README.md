@@ -54,10 +54,13 @@ remains part of the catalog for the combined SQL migration workflow; the
 standalone foundation workflow does not create a Key Vault role assignment.
 
 Grant the customer-tenant deployment service principal the `Contributor` role
-on the customer subscription. No `Role Based Access Control Administrator`
-role is needed for this foundation deployment because the Bicep template does
-not create role assignments. Protect the `customer-foundation-apply` GitHub
-Environment and require approval from the customer deployment reviewers.
+on the customer subscription. When Search is enabled for TST with public
+network access, the foundation also assigns the Search Service Contributor role
+to a configuration identity. The deployment service principal therefore needs
+permission to create role assignments at the Search service scope, such as
+`Role Based Access Control Administrator`, `User Access Administrator`, or
+`Owner`. Protect the `customer-foundation-apply` GitHub Environment and require
+approval from the customer deployment reviewers.
 
 ## Customer catalog parameters
 
@@ -117,9 +120,45 @@ that design.
   applying migrations. Use the combined workflow for SQL migrations and
   Stabu reference-data import.
 - **Azure AI Search:** The service is created when `enableSearchService` is
-  true. The deployment returns the endpoint and service name, but not service
-  keys or indexes.
+  true. Bicep configures API-key or Entra authentication and enables the
+  service's system-assigned identity. For TST with public network access
+  enabled, it creates the Projects and SharePoint indexes, SQL data source,
+  embedding skillset, and a disabled SQL indexer. The deployment returns the
+  endpoint and service name, but not service keys.
 - **Azure AI Services:** The deployment returns the account endpoint and
   configured model deployment names. It does not return resource keys.
 - **Document Intelligence:** The deployment returns the endpoint, not resource
   keys.
+
+## Azure AI Search TST setup
+
+Bicep applies Search data-plane configuration only when the environment is
+`tst`, Search is enabled, and `publicNetworkAccess` is `Enabled`. ACC and PROD
+Search objects are deferred until the deployment path can reach their private
+endpoints. The SharePoint index is only a schema; no SharePoint data source,
+skillset, or indexer is defined.
+
+The SQL data source uses the Search service's system-assigned identity and the
+database resource ID. After the SQL baseline migration creates
+`dbo.vw_projects`, a customer SQL administrator must run
+[`search/grant-search-view-access.sql`](../../infra/customer-foundation/search/grant-search-view-access.sql)
+in that database. Replace `__SEARCH_SERVICE_NAME__` with the deployed Search
+service name. This creates the external database user and grants it `SELECT`
+on the view. SQL Entra-only authentication remains enabled by default.
+
+The embedding skillset is initially created with the explicit
+`__ENTER_IN_AZURE_PORTAL__` placeholder as its API key, and the indexer is
+created disabled. Before enabling the indexer:
+
+1. Open the Search service in Azure Portal, open `sql-vector-skillset`, and
+   replace the placeholder API key with the Azure OpenAI key for the configured
+   embedding deployment. Do not put this key in repository files, Bicep
+   parameters, outputs, or deployment logs.
+2. Complete the SQL view grant above.
+3. Open `sql-<customerCode>-indexer`, enable it, and run it.
+
+On later Bicep applies, indexes and the SQL data source are updated. An
+existing skillset or indexer is left as-is, preserving the portal-entered key
+and the indexer's enabled state. Make later changes to those two objects in the
+portal. The first apply creates the indexer disabled, so it cannot run before
+the API key and SQL permission are ready.

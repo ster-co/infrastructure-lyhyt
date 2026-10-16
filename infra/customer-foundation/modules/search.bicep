@@ -13,12 +13,15 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if
   name: searchServiceName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   sku: {
     name: 'basic'
   }
   properties: {
     authOptions: {
-      apiKeyOnly: {}
+      aadOrApiKey: {}
     }
     computeType: 'Default'
     hostingMode: 'Default'

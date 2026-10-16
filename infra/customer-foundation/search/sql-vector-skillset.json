@@ -1,0 +1,29 @@
+{
+  "name": "sql-vector-skillset",
+  "description": "Generates embeddings for SQL rows",
+  "skills": [
+    {
+      "@odata.type": "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
+      "name": "sql-embedding-skill",
+      "context": "/document",
+      "resourceUri": "__AZURE_OPENAI_ENDPOINT__",
+      "apiKey": "__ENTER_IN_AZURE_PORTAL__",
+      "deploymentId": "__EMBEDDING_DEPLOYMENT__",
+      "dimensions": 3072,
+      "modelName": "text-embedding-3-large",
+      "inputs": [
+        {
+          "name": "text",
+          "source": "/document/project_text",
+          "inputs": []
+        }
+      ],
+      "outputs": [
+        {
+          "name": "embedding",
+          "targetName": "vector_data"
+        }
+      ]
+    }
+  ]
+}
