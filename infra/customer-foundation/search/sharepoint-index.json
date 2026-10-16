@@ -1,0 +1,59 @@
+{
+  "name": "__CUSTOMER_CODE__-sharepoint-__ENVIRONMENT__",
+  "purviewEnabled": false,
+  "fields": [
+    { "name": "id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": true, "synonymMaps": [] },
+    { "name": "document_id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "chunk_id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "document", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "chunk", "type": "Edm.String", "searchable": true, "filterable": false, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "content", "type": "Edm.String", "searchable": true, "filterable": false, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "physical_page", "type": "Edm.Int32", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "physical_page_end", "type": "Edm.Int32", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "section_path", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "extraction_method", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "source_last_modified", "type": "Edm.DateTimeOffset", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "metadata_spo_document", "type": "Edm.String", "searchable": true, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "metadata_spo_path", "type": "Edm.String", "searchable": true, "filterable": true, "retrievable": true, "stored": true, "sortable": true, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "metadata_spo_item_guid", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "metadata_spo_drive_id", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "analysis_cache_key", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "analysis_engine", "type": "Edm.String", "searchable": false, "filterable": true, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "paragraph_ordinals", "type": "Edm.String", "searchable": false, "filterable": false, "retrievable": true, "stored": true, "sortable": false, "facetable": false, "key": false, "synonymMaps": [] },
+    { "name": "vector", "type": "Collection(Edm.Single)", "searchable": true, "filterable": false, "retrievable": false, "stored": true, "sortable": false, "facetable": false, "key": false, "dimensions": 3072, "vectorSearchProfile": "default-vector-profile", "synonymMaps": [] }
+  ],
+  "scoringProfiles": [],
+  "suggesters": [],
+  "analyzers": [],
+  "normalizers": [],
+  "tokenizers": [],
+  "tokenFilters": [],
+  "charFilters": [],
+  "similarity": { "@odata.type": "#Microsoft.Azure.Search.BM25Similarity" },
+  "semantic": {
+    "configurations": [
+      {
+        "name": "semantic-config",
+        "flightingOptIn": false,
+        "rankingOrder": "BoostedRerankerScore",
+        "prioritizedFields": {
+          "titleField": { "fieldName": "chunk" },
+          "prioritizedContentFields": [{ "fieldName": "content" }],
+          "prioritizedKeywordsFields": []
+        }
+      }
+    ]
+  },
+  "vectorSearch": {
+    "algorithms": [
+      {
+        "name": "hnsw",
+        "kind": "hnsw",
+        "hnswParameters": { "metric": "cosine", "m": 4, "efConstruction": 400, "efSearch": 500 }
+      }
+    ],
+    "profiles": [{ "name": "default-vector-profile", "algorithm": "hnsw" }],
+    "vectorizers": [],
+    "compressions": []
+  }
+}

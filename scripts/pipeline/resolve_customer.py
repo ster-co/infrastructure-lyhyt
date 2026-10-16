@@ -21,13 +21,8 @@ REQUIRED_FOUNDATION_PARAMETERS = frozenset({
     "storageContainerNames",
     "aiDeployments",
     "additionalTags",
-    "keyVaultEnablePurgeProtection",
-    "keyVaultSoftDeleteRetentionInDays",
     "publicNetworkAccess",
     "storageNetworkDefaultAction",
-    "keyVaultNetworkDefaultAction",
-    "runtimeAccessPrincipalId",
-    "enableSameTenantRuntimeKeyVaultRoleAssignment",
 })
 REQUIRED_RUNTIME_PARAMETERS = frozenset({
     "vnetAddressPrefix",
@@ -44,8 +39,6 @@ REQUIRED_RUNTIME_PARAMETERS = frozenset({
 })
 REQUIRED_FOUNDATION_BOOLEAN_PARAMETERS = frozenset({
     "sqlEntraOnlyAuthentication",
-    "keyVaultEnablePurgeProtection",
-    "enableSameTenantRuntimeKeyVaultRoleAssignment",
 })
 REQUIRED_RUNTIME_BOOLEAN_PARAMETERS = frozenset({
     "zoneRedundant",
@@ -282,7 +275,6 @@ def resolve_customer(
         "environment": environment,
         "location": location,
         "regionCode": region_code,
-        "customerTenantId": tenant_id,
     })
     runtime.update({
         "customerCode": customer_id,

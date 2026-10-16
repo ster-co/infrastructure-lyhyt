@@ -9,7 +9,7 @@ param customerCode string
 param environment string
 param keyVaultIntegrationEnabled bool
 param managedIdentityClientId string
-param customerKeyVaultUri string
+param runtimeKeyVaultUri string
 param platformKeyVaultUri string
 param requireKeyVault bool
 
@@ -20,7 +20,7 @@ var applicationEnvironmentVariables = keyVaultIntegrationEnabled ? [
   }
   {
     name: 'CLIENT_KEY_VAULT_URI'
-    value: customerKeyVaultUri
+    value: runtimeKeyVaultUri
   }
   {
     name: 'PLATFORM_KEY_VAULT_URI'

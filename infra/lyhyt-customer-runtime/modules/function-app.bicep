@@ -9,7 +9,7 @@ param functionWorkerRuntimeVersion string
 param deploymentStorageContainerUri string
 param applicationInsightsConnectionString string
 param keyVaultIntegrationEnabled bool = false
-param customerKeyVaultUri string = ''
+param runtimeKeyVaultUri string = ''
 param providerKeyVaultUri string = ''
 param requireKeyVault bool = false
 param hostStorageBlobServiceUri string
@@ -58,7 +58,7 @@ var applicationSettings = [
   }
   {
     name: 'CLIENT_KEY_VAULT_URI'
-    value: customerKeyVaultUri
+    value: runtimeKeyVaultUri
   }
   {
     name: 'PLATFORM_KEY_VAULT_URI'

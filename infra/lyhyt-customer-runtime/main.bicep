@@ -69,8 +69,6 @@ type keyVaultConfigurationType = {
   enabled: bool
   runtimeKeyVaultResourceId: string
   runtimeKeyVaultUri: string
-  customerKeyVaultResourceId: string
-  customerKeyVaultUri: string
   platformKeyVaultResourceId: string
   platformKeyVaultUri: string
   requireKeyVault: bool
@@ -80,8 +78,6 @@ param keyVaultConfiguration keyVaultConfigurationType = {
   enabled: false
   runtimeKeyVaultResourceId: ''
   runtimeKeyVaultUri: ''
-  customerKeyVaultResourceId: ''
-  customerKeyVaultUri: ''
   platformKeyVaultResourceId: ''
   platformKeyVaultUri: ''
   requireKeyVault: false
@@ -171,7 +167,7 @@ var documentParserPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguratio
 var mailboxSyncPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, mailboxSyncIdentityName, keyVaultSecretsUserRoleDefinitionId)
 var sdbPlatformKeyVaultRoleAssignmentName = guid(keyVaultConfiguration.platformKeyVaultResourceId, sdbIdentityName, keyVaultSecretsUserRoleDefinitionId)
 var platformKeyVaultRoleAssignmentEnabled = enablePlatformKeyVaultRoleAssignment && keyVaultConfiguration.enabled
-var runtimeApplicationKeyVaultUri = empty(keyVaultConfiguration.runtimeKeyVaultUri) ? keyVaultConfiguration.customerKeyVaultUri : keyVaultConfiguration.runtimeKeyVaultUri
+var runtimeApplicationKeyVaultUri = keyVaultConfiguration.runtimeKeyVaultUri
 
 resource customerRuntimeResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: customerRuntimeResourceGroupName
@@ -495,7 +491,7 @@ module containerApp './modules/container-app.bicep' = {
     environment: environment
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
     managedIdentityClientId: identity.outputs.identityClientId
-    customerKeyVaultUri: runtimeApplicationKeyVaultUri
+    runtimeKeyVaultUri: runtimeApplicationKeyVaultUri
     platformKeyVaultUri: runtimeApplicationKeyVaultUri
     requireKeyVault: keyVaultConfiguration.requireKeyVault
   }
@@ -521,7 +517,7 @@ module documentParserFunctionApp './modules/function-app.bicep' = {
     deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${documentParserDeploymentContainerName}'
     applicationInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
-    customerKeyVaultUri: runtimeApplicationKeyVaultUri
+    runtimeKeyVaultUri: runtimeApplicationKeyVaultUri
     providerKeyVaultUri: runtimeApplicationKeyVaultUri
     requireKeyVault: keyVaultConfiguration.requireKeyVault
     hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
@@ -550,7 +546,7 @@ module mailboxSyncFunctionApp './modules/function-app.bicep' = {
     deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${mailboxSyncDeploymentContainerName}'
     applicationInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
-    customerKeyVaultUri: runtimeApplicationKeyVaultUri
+    runtimeKeyVaultUri: runtimeApplicationKeyVaultUri
     providerKeyVaultUri: runtimeApplicationKeyVaultUri
     requireKeyVault: keyVaultConfiguration.requireKeyVault
     hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri
@@ -579,7 +575,7 @@ module sdbFunctionApp './modules/function-app.bicep' = {
     deploymentStorageContainerUri: '${functionHostStorage.outputs.blobServiceUri}${sdbDeploymentContainerName}'
     applicationInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultIntegrationEnabled: keyVaultConfiguration.enabled
-    customerKeyVaultUri: runtimeApplicationKeyVaultUri
+    runtimeKeyVaultUri: runtimeApplicationKeyVaultUri
     providerKeyVaultUri: runtimeApplicationKeyVaultUri
     requireKeyVault: keyVaultConfiguration.requireKeyVault
     hostStorageBlobServiceUri: functionHostStorage.outputs.blobServiceUri

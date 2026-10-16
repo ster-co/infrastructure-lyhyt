@@ -7,3 +7,6 @@ docs/key-vault-contract.md
 *.local.bicepparam
 AGENTS.md
 tests
+!tests/
+tests/*
+!tests/test_search_configuration_apply.py

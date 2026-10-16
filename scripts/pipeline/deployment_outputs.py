@@ -11,9 +11,6 @@ _OUTPUT_NAMES = (
     "sqlDatabaseName",
     "sqlServerResourceId",
     "sqlDatabaseResourceId",
-    "customerKeyVaultResourceId",
-    "customerKeyVaultName",
-    "customerKeyVaultUri",
     "searchEndpoint",
     "aiEndpoint",
 )
@@ -70,9 +67,6 @@ class FoundationOutputs:
     sql_database_name: str
     sql_server_resource_id: str
     sql_database_resource_id: str
-    customer_key_vault_resource_id: str
-    customer_key_vault_name: str
-    customer_key_vault_uri: str
     search_endpoint: str
     ai_endpoint: str
     storage_account_name: str = ""
@@ -90,9 +84,6 @@ class FoundationOutputs:
             "sqlDatabaseName": self.sql_database_name,
             "sqlServerResourceId": self.sql_server_resource_id,
             "sqlDatabaseResourceId": self.sql_database_resource_id,
-            "customerKeyVaultResourceId": self.customer_key_vault_resource_id,
-            "customerKeyVaultName": self.customer_key_vault_name,
-            "customerKeyVaultUri": self.customer_key_vault_uri,
             "searchEndpoint": self.search_endpoint,
             "aiEndpoint": self.ai_endpoint,
             "storageAccountName": self.storage_account_name,
@@ -129,9 +120,6 @@ def extract_foundation_outputs(raw_outputs: dict[str, object]) -> FoundationOutp
         sql_database_name=values["sqlDatabaseName"],
         sql_server_resource_id=values["sqlServerResourceId"],
         sql_database_resource_id=values["sqlDatabaseResourceId"],
-        customer_key_vault_resource_id=values["customerKeyVaultResourceId"],
-        customer_key_vault_name=values["customerKeyVaultName"],
-        customer_key_vault_uri=values["customerKeyVaultUri"],
         search_endpoint=values["searchEndpoint"],
         ai_endpoint=values["aiEndpoint"],
         storage_account_name=_optional_output_value(raw_outputs, "storageAccountName"),

@@ -5,7 +5,7 @@ Azure Bicep templates for the LYHYT shared platform, customer foundation, and cu
 ## Repository layout
 
 - `infra/lyhyt-platform/` provisions the shared platform resource group, Azure Container Registry, and optional shared platform Key Vault.
-- `infra/customer-foundation/` provisions customer-scoped Storage, Key Vault, Azure SQL, AI Services, Document Intelligence, and AI model deployments.
+- `infra/customer-foundation/` provisions customer-scoped Storage, Azure SQL, AI Search, AI Services, Document Intelligence, and AI model deployments. It does not create a customer Key Vault; the standalone foundation workflow creates the SQL server and database without running migrations or seed data.
 - `infra/lyhyt-customer-runtime/` provisions a customer resource group, Log Analytics, Application Insights, Container Apps Environment, exactly one LYHYT-owned runtime Key Vault, the customer Container App, three Flex Consumption Function Apps, one user-assigned identity and plan per Function App, shared identity-based host storage, dedicated Flex deployment containers, and workload queues/containers.
 - `reference/exports/` contains exported Azure reference templates for comparison only and is excluded from Git.
 
@@ -102,7 +102,7 @@ az deployment sub create \
 
 ### 2. Customer foundation
 
-Copy `infra/customer-foundation/environments/customer.example.bicepparam` to a customer-specific `.bicepparam` file, replace the placeholder tenant and SQL administrator values, review AI deployment capacities, then run:
+Copy `infra/customer-foundation/environments/customer.example.bicepparam` to a customer-specific `.bicepparam` file, replace the SQL Entra administrator placeholders, review AI deployment capacities, then run:
 
 ```bash
 az deployment sub create \
@@ -130,36 +130,30 @@ Review deployment outputs for resource IDs, names, and the Container App FQDN. D
 
 The additional manual workflow in
 `.github/workflows/customer-foundation.yml` deploys the customer foundation
-from `infra/customer-foundation/main.bicep`, publishes its 12 required
-foundation outputs into the customer foundation Key Vault, and runs SQL
-preflight, migration planning, and exactly one approved migration path. It
-does not authenticate to the LYHYT tenant, read shared-platform outputs,
-deploy LYHYT runtime resources, or publish to the LYHYT runtime vault. Its
-inputs are `customer_id` and `environment`; select the branch in the GitHub
-Actions run form. It rejects tag refs. The effective SQL migration version is
-derived from the highest `minimumRelease` in the migration manifest on that
-branch, so the branch supplies both the infrastructure and migration revision.
-The final workflow gate succeeds only if the foundation apply, customer-vault
-publication, and SQL path all succeed.
+from `infra/customer-foundation/main.bicep`. It creates the SQL server and
+database but does not publish to a customer Key Vault or run SQL migrations
+and seed data. It does not authenticate to the LYHYT tenant, read
+shared-platform outputs, deploy LYHYT runtime resources, or publish to the
+LYHYT runtime vault. Its inputs are `customer_id` and `environment`; select
+the branch in the GitHub Actions run form. It rejects tag refs and completes
+after a successful foundation apply.
 
 The workflow uses `migration.applicationClientId` as the `azure/login`
-`client-id`. `migration.principalObjectId` is the customer tenant's enterprise
-application/service principal **object ID**; the foundation Bicep uses this
-tenant-local object ID as the `Key Vault Secrets Officer` RBAC principal for
-the customer foundation vault. It is not the application/client ID. The
-deployment identity must have permission to create that role assignment.
+`client-id` and needs Contributor access to the customer subscription.
 Protect the `customer-foundation-apply` GitHub Environment with required
-reviewers. Key Vault publication and SQL jobs use
-`automation.customerSqlRunnerLabel`, which must reach customer private DNS and
-private endpoints when those are enabled.
+reviewers. SQL migrations remain in the combined workflow below and use
+`automation.customerSqlRunnerLabel` to reach customer private DNS and private
+endpoints when those are enabled.
 
-The publisher requires all 12 outputs and fails before writing if any are
-missing or empty. It creates or leaves matching metadata unchanged, rejects
-drift by default, and reports secret names without logging values. It does
-not publish API keys, passwords, credentials, or other operator-managed
-secrets. The SQL path imports the versioned Stabu code reference data from
-`docs/database/reference/stabucodes.csv`; destructive migrations remain behind
-the separately protected `sql-migrations-destructive` Environment.
+The combined workflow continues to run SQL preflight, migration planning,
+and one approved migration path, then imports versioned Stabu code reference
+data from `docs/database/reference/stabucodes.csv`. Destructive migrations
+remain behind the separately protected `sql-migrations-destructive`
+Environment.
+
+For customer foundation resource endpoints, available keys, and deployment
+input sources, see the
+[customer foundation onboarding guide](docs/customer-foundation/README.md#resource-values).
 
 ### Existing combined customer foundation and runtime workflow
 
@@ -239,14 +233,13 @@ The platform deployment must use a stable deployment name per environment
 and optional platform Key Vault outputs from that named deployment; it does not
 redeploy the shared platform for every customer.
 
-The safe Key Vault handoff is customer-first: apply the customer foundation,
-run the SQL gates, then create or discover the LYHYT runtime vault and
-identities, publish all runtime entries, and redeploy or restart the runtime
-with the runtime vault URI. Populate real operator-managed secrets later
-through a secured workflow, validate the application, and only then set
-`REQUIRE_KEY_VAULT=true`. The customer foundation vault remains
-customer-tenant-owned and receives no runtime-owned values. See
-[`docs/key-vault-contract.md`](docs/key-vault-contract.md) and
+The safe Key Vault handoff applies the customer foundation and runs the SQL
+gates in the combined workflow, then creates or discovers the LYHYT runtime
+vault and identities, publishes all runtime entries, and redeploys or restarts
+the runtime with the runtime vault URI. The customer foundation creates no
+Key Vault. Populate real operator-managed secrets later through a secured
+workflow, validate the application, and only then set `REQUIRE_KEY_VAULT=true`.
+See [`docs/key-vault-contract.md`](docs/key-vault-contract.md) and
 [`docs/database/migrations/README.md`](docs/database/migrations/README.md) for
 the detailed bootstrap, permissions, migration authoring, Stabu code
 reference-data import, and operations runbooks.
