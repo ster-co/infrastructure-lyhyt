@@ -210,8 +210,8 @@
       "environments": {
         "tst": {
           "subscriptionId": "3f979121-ee6c-4e8e-905f-644525f4a8f9",
-          "location": "swedencentral",
-          "regionCode": "swec",
+          "location": "francecentral",
+          "regionCode": "frc",
           "foundationParameters": {
             "sqlEntraAdministratorLogin": "Stijn van den Hoven",
             "sqlEntraAdministratorObjectId": "a44d87c6-1d28-4c34-b3aa-024caacebd3b",
