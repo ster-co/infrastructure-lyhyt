@@ -27,7 +27,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
     accessTier: 'Hot'
     allowBlobPublicAccess: false
     allowCrossTenantReplication: false
-    allowSharedKeyAccess: false
+    allowSharedKeyAccess: true
     defaultToOAuthAuthentication: true
     dnsEndpointType: 'Standard'
     encryption: {

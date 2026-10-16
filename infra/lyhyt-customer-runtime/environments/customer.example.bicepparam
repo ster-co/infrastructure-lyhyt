@@ -48,8 +48,6 @@ param keyVaultConfiguration = {
   enabled: true
   runtimeKeyVaultResourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replace-with-runtime-resource-group/providers/Microsoft.KeyVault/vaults/replace-with-runtime-vault'
   runtimeKeyVaultUri: 'https://replace-with-runtime-vault.vault.azure.net/'
-  customerKeyVaultResourceId: ''
-  customerKeyVaultUri: ''
   platformKeyVaultResourceId: ''
   platformKeyVaultUri: ''
   requireKeyVault: false

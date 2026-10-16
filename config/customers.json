@@ -70,13 +70,8 @@
               }
             ],
             "additionalTags": {"workload": "customer-foundation", "purpose": "customer-foundation-pilot"},
-            "keyVaultEnablePurgeProtection": true,
-            "keyVaultSoftDeleteRetentionInDays": 90,
             "publicNetworkAccess": "Enabled",
-            "storageNetworkDefaultAction": "Allow",
-            "keyVaultNetworkDefaultAction": "Allow",
-            "runtimeAccessPrincipalId": "00000000-0000-0000-0000-000000000000",
-            "enableSameTenantRuntimeKeyVaultRoleAssignment": false
+            "storageNetworkDefaultAction": "Allow"
           },
           "runtimeParameters": {
             "vnetAddressPrefix": "10.20.0.0/21",
@@ -171,13 +166,8 @@
               }
             ],
             "additionalTags": {"workload": "customer-foundation", "purpose": "customer-foundation-pilot"},
-            "keyVaultEnablePurgeProtection": true,
-            "keyVaultSoftDeleteRetentionInDays": 90,
             "publicNetworkAccess": "Enabled",
-            "storageNetworkDefaultAction": "Allow",
-            "keyVaultNetworkDefaultAction": "Allow",
-            "runtimeAccessPrincipalId": "00000000-0000-0000-0000-000000000000",
-            "enableSameTenantRuntimeKeyVaultRoleAssignment": false
+            "storageNetworkDefaultAction": "Allow"
           },
           "runtimeParameters": {
             "vnetAddressPrefix": "10.20.0.0/21",

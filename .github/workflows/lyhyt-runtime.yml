@@ -328,8 +328,6 @@ jobs:
           key_vault = dict(parameters["keyVaultConfiguration"])
           trusted_uri = os.environ["TRUSTED_RUNTIME_KEY_VAULT_URI"].strip()
           key_vault.update({
-              "customerKeyVaultResourceId": "",
-              "customerKeyVaultUri": "",
               "runtimeKeyVaultResourceId": "",
               "runtimeKeyVaultUri": trusted_uri,
               "platformKeyVaultResourceId": "",
@@ -535,8 +533,6 @@ jobs:
           }
           key_vault = dict(parameters["keyVaultConfiguration"])
           key_vault.update({
-              "customerKeyVaultResourceId": "",
-              "customerKeyVaultUri": "",
               "runtimeKeyVaultResourceId": safe["runtimeKeyVaultResourceId"],
               "runtimeKeyVaultUri": safe["runtimeKeyVaultUri"],
               "platformKeyVaultResourceId": "",

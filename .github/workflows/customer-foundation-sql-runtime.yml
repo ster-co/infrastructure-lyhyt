@@ -57,6 +57,7 @@ jobs:
       lyhyt_platform_subscription_id: ${{ steps.resolve.outputs.lyhyt_platform_subscription_id }}
       lyhyt_runtime_subscription_id: ${{ steps.resolve.outputs.lyhyt_runtime_subscription_id }}
       customer_sql_runner_label: ${{ steps.resolve.outputs.customer_sql_runner_label }}
+      sql_public_network_access: ${{ steps.resolve.outputs.sql_public_network_access }}
       needs_runtime_bootstrap: ${{ steps.resolve.outputs.needs_runtime_bootstrap }}
       runtime_key_vault_enabled: ${{ steps.resolve.outputs.runtime_key_vault_enabled }}
     steps:
@@ -118,6 +119,7 @@ jobs:
               "lyhyt_platform_subscription_id": resolved["automation"]["lyhytPlatformSubscriptionId"],
               "lyhyt_runtime_subscription_id": resolved["automation"]["lyhytRuntimeSubscriptionId"],
               "customer_sql_runner_label": resolved["automation"]["customerSqlRunnerLabel"],
+              "sql_public_network_access": foundation["publicNetworkAccess"],
               "needs_runtime_bootstrap": str(needs_bootstrap).lower(),
               "runtime_key_vault_enabled": str(key_vault["enabled"]).lower(),
           }
@@ -312,8 +314,6 @@ jobs:
           key_vault = dict(parameters["keyVaultConfiguration"])
           current_uri = os.environ.get("CURRENT_RUNTIME_KEY_VAULT_URI", "").strip()
           current_require = os.environ.get("CURRENT_REQUIRE_KEY_VAULT", "").strip().lower()
-          key_vault["customerKeyVaultResourceId"] = ""
-          key_vault["customerKeyVaultUri"] = ""
           key_vault["runtimeKeyVaultResourceId"] = ""
           key_vault["runtimeKeyVaultUri"] = current_uri
           key_vault["platformKeyVaultResourceId"] = os.environ["PLATFORM_KEY_VAULT_RESOURCE_ID"]
@@ -572,8 +572,6 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["foundationParameters"])
-          parameters["runtimeAccessPrincipalId"] = ""
-          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep lint --file "$FOUNDATION_TEMPLATE"
@@ -594,8 +592,6 @@ jobs:
       sqlDatabaseName: ${{ steps.apply.outputs.sqlDatabaseName }}
       sqlServerResourceId: ${{ steps.apply.outputs.sqlServerResourceId }}
       sqlDatabaseResourceId: ${{ steps.apply.outputs.sqlDatabaseResourceId }}
-      customerKeyVaultResourceId: ${{ steps.apply.outputs.customerKeyVaultResourceId }}
-      customerKeyVaultUri: ${{ steps.apply.outputs.customerKeyVaultUri }}
       searchEndpoint: ${{ steps.apply.outputs.searchEndpoint }}
       aiEndpoint: ${{ steps.apply.outputs.aiEndpoint }}
       documentIntelligenceEndpoint: ${{ steps.apply.outputs.documentIntelligenceEndpoint }}
@@ -646,8 +642,6 @@ jobs:
 
           resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           parameters = dict(resolved["foundationParameters"])
-          parameters["runtimeAccessPrincipalId"] = ""
-          parameters["enableSameTenantRuntimeKeyVaultRoleAssignment"] = False
           render_bicepparam(Path(sys.argv[2]), "../main.bicep", parameters)
           PY
           az bicep build-params --file "$PARAM_FILE" --stdout > /dev/null
@@ -677,9 +671,6 @@ jobs:
               )
               validate_resource_id_subscription(
                   safe["sqlDatabaseResourceId"], sys.argv[3], "Microsoft.Sql"
-              )
-              validate_resource_id_subscription(
-                  safe["customerKeyVaultResourceId"], sys.argv[3], "Microsoft.KeyVault"
               )
           except (OSError, ValueError, json.JSONDecodeError):
               raise SystemExit("customer foundation returned invalid safe outputs") from None
@@ -756,7 +747,7 @@ jobs:
           Path(sys.argv[1]).write_text(json.dumps(foundation), encoding="utf-8")
           Path(sys.argv[2]).write_text(json.dumps(runtime), encoding="utf-8")
           PY
-          python3 scripts/pipeline/publish_runtime_configuration.py \
+          python3 -m scripts.pipeline.publish_runtime_configuration \
             --foundation-outputs "$FOUNDATION_OUTPUTS_FILE" \
             --runtime-outputs "$RUNTIME_OUTPUTS_FILE" \
             --customer-tenant-id "$CUSTOMER_TENANT_ID" \
@@ -782,7 +773,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
+
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
 
       - name: Validate SQL resource IDs from foundation apply
         env:
@@ -812,12 +806,23 @@ jobs:
               raise SystemExit("SQL resource output subscription validation failed") from None
           PY
 
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
+
       - name: Run mandatory Python, driver, token, and SQL preflight
         env:
           SQL_SERVER_FQDN: ${{ needs.customer_foundation_apply.outputs.sqlServerFqdn }}
           SQL_DATABASE_NAME: ${{ needs.customer_foundation_apply.outputs.sqlDatabaseName }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -828,6 +833,15 @@ jobs:
             --release-version "$RELEASE_VERSION" \
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --preflight
+
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
 
   sql_migration_plan:
     needs: [resolve, customer_foundation_apply, sql_migration_preflight]
@@ -851,7 +865,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
 
       - name: Verify migration manifest
         id: plan
@@ -916,7 +930,20 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
+
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
+
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
 
       - name: Apply approved non-destructive SQL migrations
         env:
@@ -927,6 +954,7 @@ jobs:
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -956,6 +984,15 @@ jobs:
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --output json
 
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
+
   sql_migration_execute_destructive:
     needs: [resolve, customer_foundation_apply, sql_migration_plan]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.sql_migration_plan.result == 'success' && needs.sql_migration_plan.outputs.has_destructive_migrations == 'true' }}
@@ -978,7 +1015,20 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --requirement requirements.txt
-          python3 -c 'import azure.identity'
+          python3 -c 'import azure.identity, pyodbc'
+
+      - name: Set up SQL Server ODBC Driver 18
+        uses: ./.github/actions/setup-sql-odbc-driver
+
+      - name: Open temporary SQL firewall for hosted runner
+        id: sql_firewall
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_PUBLIC_NETWORK_ACCESS: ${{ needs.resolve.outputs.sql_public_network_access }}
+          SQL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule open
 
       - name: Apply approved destructive SQL migrations
         env:
@@ -989,6 +1039,7 @@ jobs:
           CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
           MIGRATION_APPLICATION_CLIENT_ID: ${{ needs.resolve.outputs.migration_application_client_id }}
           RELEASE_VERSION: ${{ needs.resolve.outputs.release_version }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1018,6 +1069,15 @@ jobs:
             --sql-database-name "$SQL_DATABASE_NAME" \
             --expected-application-client-id "$MIGRATION_APPLICATION_CLIENT_ID" \
             --output json
+
+      - name: Remove temporary SQL firewall rule
+        if: ${{ always() && steps.sql_firewall.outputs.rule_name != '' }}
+        env:
+          SQL_SERVER_RESOURCE_ID: ${{ needs.customer_foundation_apply.outputs.sqlServerResourceId }}
+          CUSTOMER_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          SQL_FIREWALL_RULE_NAME: ${{ steps.sql_firewall.outputs.rule_name }}
+        shell: bash
+        run: python3 -m scripts.pipeline.sql_firewall_rule close --rule-name "$SQL_FIREWALL_RULE_NAME"
 
   customer_sql_complete:
     needs: [resolve, sql_migration_preflight, sql_migration_plan, sql_migration_execute, sql_migration_execute_destructive]
@@ -1114,8 +1174,6 @@ jobs:
           key_vault = dict(parameters["keyVaultConfiguration"])
           key_vault["runtimeKeyVaultResourceId"] = os.environ["RUNTIME_KEY_VAULT_RESOURCE_ID"]
           key_vault["runtimeKeyVaultUri"] = os.environ["RUNTIME_KEY_VAULT_URI"]
-          key_vault["customerKeyVaultResourceId"] = ""
-          key_vault["customerKeyVaultUri"] = ""
           key_vault["platformKeyVaultResourceId"] = ""
           key_vault["platformKeyVaultUri"] = ""
           key_vault["enabled"] = True
