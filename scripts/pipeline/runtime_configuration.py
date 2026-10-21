@@ -59,7 +59,6 @@ RUNTIME_SECRET_NAMES: tuple[tuple[str, str], ...] = (
     ("EXTRACTION_CODE", "extraction-code"),
     ("DOCUMENT_PARSER_ENDPOINT", "document-parser-endpoint"),
     ("DOCUMENT_PARSER_CODE", "document-parser-code"),
-    ("AzureWebJobsStorage", "azure-web-jobs-storage"),
     ("EXTRACTION_QUEUE_NAME", "extraction-queue-name"),
     ("OFFERTE_FLOW_QUEUE_NAME", "offerte-flow-queue-name"),
     ("JOB_STATUS_CONTAINER_NAME", "job-status-container-name"),

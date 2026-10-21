@@ -64,12 +64,12 @@ publisher principal receives `Key Vault Secrets Officer` only at the runtime
 vault scope. The customer foundation deployment does not grant LYHYT
 identities access to its customer-tenant vault.
 
-## Complete SDB runtime secret contract
+## SDB runtime secret contract
 
-These are the exact names expected by the SDB Key Vault loader. The publisher
-creates every entry. An unavailable value is created as `not-configured`;
-this is never a password, token, API key, Function key, OAuth secret, or
-connection string.
+These are the exact names expected by the documented URI-based SDB Key Vault
+contract. The publisher creates all 48 entries. An unavailable value is
+created as `not-configured`; this is never a password, token, API key,
+Function key, OAuth secret, or connection string.
 
 | SDB setting | Runtime Key Vault secret |
 |---|---|
@@ -104,7 +104,6 @@ connection string.
 | `EXTRACTION_CODE` | `extraction-code` |
 | `DOCUMENT_PARSER_ENDPOINT` | `document-parser-endpoint` |
 | `DOCUMENT_PARSER_CODE` | `document-parser-code` |
-| `AzureWebJobsStorage` | `azure-web-jobs-storage` |
 | `EXTRACTION_QUEUE_NAME` | `extraction-queue-name` |
 | `OFFERTE_FLOW_QUEUE_NAME` | `offerte-flow-queue-name` |
 | `JOB_STATUS_CONTAINER_NAME` | `job-status-container-name` |
@@ -143,10 +142,12 @@ hydrates these values when outputs are present:
 
 No current safe source exists for the remaining entries. They remain
 `not-configured`, including `db-password`, all API keys and secrets,
-`azure-web-jobs-storage`, mailbox values, queue/index names that are not
-deployment outputs, and all other unavailable settings. The runtime uses
-identity-based Azure Functions host storage; it does not invent or publish a
-storage connection string.
+mailbox values, queue/index names that are not deployment outputs, and all
+other unavailable settings. The runtime uses identity-based Azure Functions
+host storage; it does not publish a host storage connection string.
+
+The retired `azure-web-jobs-storage` entry is no longer created or required.
+If it already exists in a vault, publication leaves it untouched.
 
 The three Function Apps share one host-storage account with account-level
 storage RBAC. Separate managed identities therefore do not isolate the
@@ -254,7 +255,7 @@ without changes. It follows this sequence:
 3. In the LYHYT tenant and runtime subscription, bootstrap the runtime
    resources and identities, or discover the existing runtime and its safe
    outputs.
-4. Publish the complete 49-entry configuration to the runtime vault.
+4. Publish the complete 48-entry configuration to the runtime vault.
 5. Deploy or restart the runtime with the completed runtime vault URI and
    `REQUIRE_KEY_VAULT` setting.
 
