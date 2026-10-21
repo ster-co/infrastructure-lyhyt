@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
+import json
 import os
 import re
 import struct
@@ -122,6 +124,36 @@ def _token_attrs(token: str) -> dict[int, bytes]:
     return {ACCESS_TOKEN_ATTRIBUTE: struct.pack("=i", len(token_bytes)) + token_bytes}
 
 
+def _safe_sql_token_identity(token: str) -> str:
+    """Return non-secret identity claims useful for diagnosing SQL logins."""
+    try:
+        payload_segment = token.split(".")[1]
+        payload_segment += "=" * (-len(payload_segment) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload_segment).decode("utf-8"))
+        if not isinstance(claims, dict):
+            raise ValueError("SQL access token payload is not an object")
+    except (IndexError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return "tenant=unavailable, object=unavailable, app=unavailable, audience=unavailable"
+
+    def claim_text(name: str) -> str:
+        value = claims.get(name)
+        if isinstance(value, str) and value:
+            return value[:200]
+        if isinstance(value, list):
+            values = [item[:200] for item in value if isinstance(item, str) and item]
+            if values:
+                return ",".join(values)[:200]
+        return "unavailable"
+
+    application_id = claim_text("appid")
+    if application_id == "unavailable":
+        application_id = claim_text("azp")
+    return (
+        f"tenant={claim_text('tid')}, object={claim_text('oid')}, "
+        f"app={application_id}, audience={claim_text('aud')}"
+    )
+
+
 def _safe_sqlstate(exc: Exception) -> str | None:
     args = getattr(exc, "args", ())
     if not args or not isinstance(args[0], str):
@@ -186,6 +218,11 @@ def _connect_with_access_token(
             "SQL migration preflight could not acquire the SQL access token; "
             "check Azure CLI token authentication"
         ) from exc
+
+    print(
+        "SQL access token identity: " + _safe_sql_token_identity(access_token),
+        file=sys.stderr,
+    )
 
     connection_string = _build_connection_string(server, database)
     token_attributes = _token_attrs(access_token)

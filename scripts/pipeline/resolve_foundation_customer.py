@@ -1,4 +1,4 @@
-"""Resolve only the customer-foundation and SQL workflow configuration."""
+"""Resolve the configuration needed to deploy the customer foundation."""
 
 from __future__ import annotations
 
@@ -9,9 +9,6 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any
-
-from scripts.sql.migration_common import latest_manifest_release_version
-
 
 _SAFE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _CUSTOMER_CODE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,10}[a-z0-9])")
@@ -24,11 +21,8 @@ _REQUIRED_FOUNDATION_PARAMETERS = frozenset(
         "storageContainerNames",
         "aiDeployments",
         "additionalTags",
-        "keyVaultEnablePurgeProtection",
-        "keyVaultSoftDeleteRetentionInDays",
         "publicNetworkAccess",
         "storageNetworkDefaultAction",
-        "keyVaultNetworkDefaultAction",
     }
 )
 
@@ -46,17 +40,6 @@ def _uuid(value: Any, field: str) -> str:
 def _safe_name(value: Any, field: str) -> str:
     if not isinstance(value, str) or _SAFE_NAME.fullmatch(value) is None:
         raise ValueError(f"{field} must use a lowercase Azure-safe name")
-    return value
-
-
-def _runner_label(value: Any) -> str:
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or len(value) > 100
-        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
-    ):
-        raise ValueError("automation.customerSqlRunnerLabel must be a non-empty runner label")
     return value
 
 
@@ -89,7 +72,7 @@ def _validate_foundation_parameters(
     if missing:
         raise ValueError("foundationParameters missing required keys: " + ", ".join(missing))
 
-    for field in ("sqlEntraOnlyAuthentication", "keyVaultEnablePurgeProtection"):
+    for field in ("sqlEntraOnlyAuthentication",):
         if type(parameters[field]) is not bool:
             raise ValueError(f"foundationParameters.{field} must be a JSON boolean")
 
@@ -118,16 +101,10 @@ def _validate_foundation_parameters(
         raise ValueError("foundationParameters.aiDeployments must be an array of objects")
     if not isinstance(parameters["additionalTags"], dict):
         raise ValueError("foundationParameters.additionalTags must be an object")
-    retention = parameters["keyVaultSoftDeleteRetentionInDays"]
-    if type(retention) is not int or not 7 <= retention <= 90:
-        raise ValueError(
-            "foundationParameters.keyVaultSoftDeleteRetentionInDays must be between 7 and 90"
-        )
     if parameters["publicNetworkAccess"] not in ("Enabled", "Disabled"):
         raise ValueError("foundationParameters.publicNetworkAccess must be Enabled or Disabled")
-    for field in ("storageNetworkDefaultAction", "keyVaultNetworkDefaultAction"):
-        if parameters[field] not in ("Allow", "Deny"):
-            raise ValueError(f"foundationParameters.{field} must be Allow or Deny")
+    if parameters["storageNetworkDefaultAction"] not in ("Allow", "Deny"):
+        raise ValueError("foundationParameters.storageNetworkDefaultAction must be Allow or Deny")
     return parameters
 
 
@@ -136,13 +113,11 @@ def resolve_foundation_customer(
     customer_id: str,
     environment: str,
     ref_type: str,
-    manifest_path: Path,
 ) -> dict[str, Any]:
-    """Return only values needed to deploy customer foundation and SQL."""
+    """Return only values needed to deploy the customer foundation."""
 
     if ref_type != "branch":
         raise ValueError("customer foundation workflow must be run from a branch")
-    release_version = latest_manifest_release_version(manifest_path)
     if not isinstance(customer_id, str) or _CUSTOMER_CODE.fullmatch(customer_id) is None:
         raise ValueError("customer_id must be a lowercase customer code of 2 to 12 characters")
     if environment not in ("tst", "acc", "prod"):
@@ -152,18 +127,13 @@ def resolve_foundation_customer(
 
     migration = customer.get("migration")
     if not isinstance(migration, dict):
-        raise ValueError("customer migration identity is required")
-    principal_object_id = _uuid(
-        migration.get("principalObjectId"), "migration.principalObjectId"
-    )
+        raise ValueError("customer foundation deployment identity is required")
     application_client_id = _uuid(
         migration.get("applicationClientId"), "migration.applicationClientId"
     )
-
-    automation = customer.get("automation")
-    if not isinstance(automation, dict):
-        raise ValueError("customer automation configuration is required")
-    sql_runner_label = _runner_label(automation.get("customerSqlRunnerLabel"))
+    principal_object_id = _uuid(
+        migration.get("principalObjectId"), "migration.principalObjectId"
+    )
 
     environments = customer.get("environments")
     if not isinstance(environments, dict) or environment not in environments:
@@ -185,9 +155,7 @@ def resolve_foundation_customer(
             "environment": environment,
             "location": location,
             "regionCode": region_code,
-            "customerTenantId": customer_tenant_id,
-            "runtimeAccessPrincipalId": "",
-            "enableSameTenantRuntimeKeyVaultRoleAssignment": False,
+            "searchConfigurationPrincipalObjectId": principal_object_id,
         }
     )
 
@@ -198,12 +166,10 @@ def resolve_foundation_customer(
         "subscriptionId": subscription_id,
         "location": location,
         "regionCode": region_code,
-        "releaseVersion": release_version,
         "migration": {
-            "principalObjectId": principal_object_id,
             "applicationClientId": application_client_id,
+            "principalObjectId": principal_object_id,
         },
-        "automation": {"customerSqlRunnerLabel": sql_runner_label},
         "foundationParameters": foundation,
     }
 
@@ -214,7 +180,6 @@ def main() -> int:
     parser.add_argument("--customer-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--ref-type", required=True)
-    parser.add_argument("--manifest", required=True, type=Path)
     args = parser.parse_args()
     try:
         catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
@@ -223,7 +188,6 @@ def main() -> int:
             args.customer_id,
             args.environment,
             args.ref_type,
-            args.manifest,
         )
         print(json.dumps(resolved, sort_keys=True))
     except (OSError, json.JSONDecodeError, ValueError) as error:

@@ -1,13 +1,11 @@
 # Key Vault and runtime identity contract
 
 The LYHYT-owned runtime Key Vault is deployed in the LYHYT tenant and LYHYT
-runtime subscription. The customer foundation Key Vault is a separate
-customer-tenant resource. The customer-foundation-only workflow can publish
-safe foundation metadata into that vault; it never publishes LYHYT runtime
-values there.
+runtime subscription. The customer foundation does not create a Key Vault.
+The combined foundation/runtime workflow publishes safe foundation metadata
+to the LYHYT runtime vault along with the rest of the runtime configuration.
 
-Each customer/environment has its own Key Vault in the LYHYT runtime tenant;
-the customer foundation vault is a separate customer-owned resource.
+Each customer/environment has its own Key Vault in the LYHYT runtime tenant.
 
 The resolved infrastructure environment uses `azure-identity 1.25.3`.
 `DefaultAzureCredential` consumes `AZURE_CLIENT_ID`, so Bicep supplies each
@@ -35,8 +33,6 @@ type keyVaultConfigurationType = {
   enabled: bool
   runtimeKeyVaultResourceId: string
   runtimeKeyVaultUri: string
-  customerKeyVaultResourceId: string
-  customerKeyVaultUri: string
   platformKeyVaultResourceId: string
   platformKeyVaultUri: string
   requireKeyVault: bool
@@ -61,8 +57,7 @@ The runtime creates four workload identities: the Container App identity,
 document-parser identity, mailbox-sync identity, and `sdb` identity. Each
 receives `Key Vault Secrets User` on the runtime vault. The workflow's
 publisher principal receives `Key Vault Secrets Officer` only at the runtime
-vault scope. The customer foundation deployment does not grant LYHYT
-identities access to its customer-tenant vault.
+vault scope. Customer foundation resources are deployed without a Key Vault.
 
 ## SDB runtime secret contract
 
@@ -168,52 +163,12 @@ values. It uses bounded retries for transient Azure CLI failures and has no
 blanket overwrite switch. Operator-managed values must be rotated through an
 explicit, separately controlled process.
 
-## Customer foundation Key Vault publication
+## Customer foundation Key Vault boundary
 
-The additional `.github/workflows/customer-foundation.yml` workflow publishes
-exactly these 12 non-secret customer-foundation outputs to the customer
-foundation Key Vault. Every mapped Bicep output must be present and non-empty;
-publication fails before any write if one is missing or empty.
-
-| Bicep output | Customer foundation Key Vault name |
-|---|---|
-| `storageAccountName` | `storage-account-name` |
-| `blobEndpoint` | `storage-blob-endpoint` |
-| `sqlServerFqdn` | `db-server-name` |
-| `sqlDatabaseName` | `db-name` |
-| `searchServiceName` | `azure-search-service-name` |
-| `searchEndpoint` | `azure-search-service-endpoint` |
-| `aiEndpoint` | `azure-openai-endpoint` |
-| `documentIntelligenceEndpoint` | `document-intelligence-endpoint` |
-| `gpt5DeploymentName` | `azure-openai-deployment-gpt5` |
-| `gpt54DeploymentName` | `azure-openai-deployment-gpt54` |
-| `gpt5MiniDeploymentName` | `azure-openai-deployment-gpt5-mini` |
-| `textEmbedding3LargeDeploymentName` | `azure-openai-deployment-text-embedding-3-large` |
-
-The workflow uses `migration.applicationClientId` for customer-tenant
-`azure/login`. Its vault role assignment targets
-`migration.principalObjectId`, the customer tenant's enterprise
-application/service principal **object ID**. This is the tenant-local RBAC
-principal object ID, not the application/client ID. The optional Bicep
-assignment grants `Key Vault Secrets Officer` only at the customer foundation
-vault scope. The foundation deployment identity needs permission to create
-role assignments.
-
-Publication creates missing entries, leaves matching entries unchanged, and
-fails on conflicting values by default. Errors and workflow output contain
-secret names and their created/unchanged/updated status only, never published
-values. The workflow does not publish `brave-search-api-key`, passwords,
-credentials, or other operator-managed secrets. These customer-vault entries
-do not replace or modify the separate LYHYT runtime vault contract.
-
-## Customer foundation-only sequence
-
-The customer-foundation-only workflow applies the customer Bicep foundation,
-publishes the 12 outputs above, and runs SQL preflight, migration planning,
-and one approved standard or destructive migration path. Both Key Vault
-publication and successful SQL completion are required for the final workflow
-gate. SQL and Key Vault jobs use `automation.customerSqlRunnerLabel` so
-production private DNS and private endpoints are reachable.
+The `.github/workflows/customer-foundation.yml` workflow applies customer
+foundation resources without creating or publishing to a customer Key Vault.
+It creates the SQL server and database but does not run SQL migrations or
+seed data. SQL migrations remain in the combined foundation/runtime workflow.
 
 ## Standalone runtime-only sequence
 
@@ -245,8 +200,8 @@ Vault settings.
 
 ## Combined customer-foundation sequence and operations
 
-The existing combined customer-foundation/runtime workflow remains available
-without changes. It follows this sequence:
+The combined customer-foundation/runtime workflow remains the path for SQL
+migrations and runtime deployment. It follows this sequence:
 
 1. Apply the customer foundation in the customer tenant and collect safe
    endpoints and deployment names.

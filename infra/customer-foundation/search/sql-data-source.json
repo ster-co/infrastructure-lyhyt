@@ -1,0 +1,11 @@
+{
+  "name": "azuresql-__CUSTOMER_CODE__-datasource",
+  "description": "Azure SQL projects view using the Search service managed identity",
+  "type": "azuresql",
+  "credentials": {
+    "connectionString": "ResourceId=__SQL_DATABASE_RESOURCE_ID__;"
+  },
+  "container": {
+    "name": "vw_projects"
+  }
+}

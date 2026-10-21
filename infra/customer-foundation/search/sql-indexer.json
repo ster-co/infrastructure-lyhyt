@@ -1,0 +1,23 @@
+{
+  "name": "sql-__CUSTOMER_CODE__-indexer",
+  "description": "Indexes Azure SQL projects and generates vector embeddings",
+  "dataSourceName": "azuresql-__CUSTOMER_CODE__-datasource",
+  "skillsetName": "sql-vector-skillset",
+  "targetIndexName": "__CUSTOMER_CODE__-projects",
+  "disabled": true,
+  "schedule": {
+    "interval": "P1D"
+  },
+  "fieldMappings": [
+    {
+      "sourceFieldName": "name",
+      "targetFieldName": "content"
+    }
+  ],
+  "outputFieldMappings": [
+    {
+      "sourceFieldName": "/document/vector_data",
+      "targetFieldName": "vector"
+    }
+  ]
+}

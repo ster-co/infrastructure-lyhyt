@@ -49,16 +49,10 @@ param aiDeployments = [
 ]
 
 param customerCode = 'pilot2'
-param customerTenantId = 'a450ace8-4fd1-4338-a906-912ee75dc7e3'
-param enableSameTenantRuntimeKeyVaultRoleAssignment = false
 param environment = 'tst'
-param keyVaultEnablePurgeProtection = true
-param keyVaultNetworkDefaultAction = 'Allow'
-param keyVaultSoftDeleteRetentionInDays = 90
 param location = 'swedencentral'
 param publicNetworkAccess = 'Enabled'
 param regionCode = 'swec'
-param runtimeAccessPrincipalId = ''
 param sqlEntraAdministratorLogin = 'LYHYT Infrastructure TST'
 param sqlEntraAdministratorObjectId = 'efbf96fc-efab-4c35-80e1-2731b69faae3'
 param sqlEntraAdministratorTenantId = 'a450ace8-4fd1-4338-a906-912ee75dc7e3'

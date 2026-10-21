@@ -9,4 +9,9 @@ AGENTS.md
 tests
 !tests/
 tests/*
+!tests/test_search_configuration_apply.py
+.github/workflows/customer-foundation-sql-runtime.yml
+.github/workflows/lyhyt-runtime.yml
+!tests/
+tests/*
 !tests/test_runtime_configuration.py

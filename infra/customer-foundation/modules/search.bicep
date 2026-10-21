@@ -2,6 +2,8 @@ param searchServiceName string
 param location string
 param tags object
 param enableSearchService bool = true
+param enableSearchConfiguration bool = true
+param searchConfigurationPrincipalObjectId string = ''
 
 @allowed([
   'Enabled'
@@ -13,12 +15,15 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if
   name: searchServiceName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   sku: {
     name: 'basic'
   }
   properties: {
     authOptions: {
-      apiKeyOnly: {}
+      aadOrApiKey: {}
     }
     computeType: 'Default'
     hostingMode: 'Default'
@@ -30,6 +35,22 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if
     publicNetworkAccess: publicNetworkAccess
     replicaCount: 1
     semanticSearch: 'standard'
+  }
+}
+
+// The workflow identity uses the Search Service Contributor data-plane role to apply Search objects.
+var searchServiceContributorRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
+)
+
+resource searchConfigurationRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableSearchService && enableSearchConfiguration && !empty(searchConfigurationPrincipalObjectId)) {
+  name: guid(searchService.id, searchConfigurationPrincipalObjectId, searchServiceContributorRoleId)
+  scope: searchService
+  properties: {
+    principalId: searchConfigurationPrincipalObjectId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: searchServiceContributorRoleId
   }
 }
 

@@ -13,7 +13,6 @@ param environment string
 
 param location string
 param regionCode string
-param customerTenantId string
 
 param sqlEntraAdministratorLogin string
 param sqlEntraAdministratorObjectId string
@@ -21,18 +20,11 @@ param sqlEntraAdministratorPrincipalType string = 'User'
 param sqlEntraAdministratorTenantId string
 param sqlEntraOnlyAuthentication bool = true
 param enableSearchService bool = true
-
-// Generic customer-side handoff. For the same-tenant pilot this is the
-// LYHYT runtime UAMI principal ID. In the future cross-tenant architecture it
-// can be a customer-tenant service-principal object ID created through WIF.
-param runtimeAccessPrincipalId string = ''
-param enableSameTenantRuntimeKeyVaultRoleAssignment bool = false
-// Customer tenant's enterprise application/service principal object ID. This
-// is distinct from the application/client ID used by GitHub OIDC login.
-param keyVaultPublisherPrincipalObjectId string = ''
+param searchConfigurationPrincipalObjectId string = ''
 
 param storageContainerNames array
 param aiDeployments array
+param restoreAiServices bool = false
 param additionalTags object = {}
 
 @allowed([
@@ -47,18 +39,6 @@ param publicNetworkAccess string = 'Enabled'
 ])
 param storageNetworkDefaultAction string = 'Allow'
 
-@allowed([
-  'Allow'
-  'Deny'
-])
-param keyVaultNetworkDefaultAction string = 'Deny'
-
-param keyVaultEnablePurgeProtection bool = true
-
-@minValue(7)
-@maxValue(90)
-param keyVaultSoftDeleteRetentionInDays int = 7
-
 var compactCustomerCode = replace(toLower(customerCode), '-', '')
 var commonTags = union({
     project: 'lyhyt'
@@ -71,17 +51,11 @@ var commonTags = union({
 
 var customerResourceGroupName = 'rg-${customerCode}-foundation-${environment}-${regionCode}'
 var storageAccountName = 'st${compactCustomerCode}${environment}${regionCode}'
-// Keep customer identity out of the name itself: customerCode and regionCode
-// are bounded for this deployment, but the vault name must remain globally
-// valid even when those inputs change shape in future entry points.
-var keyVaultName = 'kvc${uniqueString(subscription().id, customerResourceGroupName, customerCode, environment, regionCode)}'
 var sqlServerName = 'sql-${customerCode}-${environment}-${regionCode}'
 var sqlDatabaseName = 'sqldb-${customerCode}-${environment}'
 var searchServiceName = 'search-${customerCode}-${environment}-${regionCode}'
 var aiServicesName = 'ai-${customerCode}-${environment}-${regionCode}'
 var documentIntelligenceName = 'di-${customerCode}-${environment}-${regionCode}'
-var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-
 resource customerResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: customerResourceGroupName
   location: location
@@ -98,41 +72,6 @@ module storage './modules/storage.bicep' = {
     containerNames: storageContainerNames
     publicNetworkAccess: publicNetworkAccess
     networkDefaultAction: storageNetworkDefaultAction
-  }
-}
-
-module keyVault './modules/key-vault.bicep' = {
-  name: 'customer-foundation-key-vault'
-  scope: customerResourceGroup
-  params: {
-    keyVaultName: keyVaultName
-    location: location
-    tenantId: customerTenantId
-    tags: commonTags
-    publicNetworkAccess: publicNetworkAccess
-    networkDefaultAction: keyVaultNetworkDefaultAction
-    softDeleteRetentionInDays: keyVaultSoftDeleteRetentionInDays
-    enablePurgeProtection: keyVaultEnablePurgeProtection
-  }
-}
-
-module sameTenantRuntimeKeyVaultAccess './modules/key-vault-role-assignment.bicep' = if (enableSameTenantRuntimeKeyVaultRoleAssignment) {
-  name: 'assign-kv-access-${customerCode}-${environment}'
-  scope: customerResourceGroup
-  params: {
-    keyVaultResourceId: keyVault.outputs.keyVaultResourceId
-    roleAssignmentName: guid(keyVault.outputs.keyVaultResourceId, runtimeAccessPrincipalId, keyVaultSecretsUserRoleDefinitionId)
-    principalId: runtimeAccessPrincipalId
-  }
-}
-
-module keyVaultPublisherAccess './modules/key-vault-secrets-officer-role-assignment.bicep' = if (keyVaultPublisherPrincipalObjectId != '') {
-  name: 'assign-kv-publisher-${customerCode}-${environment}'
-  scope: customerResourceGroup
-  params: {
-    keyVaultResourceId: keyVault.outputs.keyVaultResourceId
-    roleAssignmentName: guid(keyVault.outputs.keyVaultResourceId, keyVaultPublisherPrincipalObjectId, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'))
-    principalObjectId: keyVaultPublisherPrincipalObjectId
   }
 }
 
@@ -162,6 +101,8 @@ module search './modules/search.bicep' = {
     tags: commonTags
     publicNetworkAccess: publicNetworkAccess
     enableSearchService: enableSearchService
+    enableSearchConfiguration: environment == 'tst' && publicNetworkAccess == 'Enabled'
+    searchConfigurationPrincipalObjectId: searchConfigurationPrincipalObjectId
   }
 }
 
@@ -174,6 +115,7 @@ module ai './modules/ai.bicep' = {
     location: location
     tags: commonTags
     deployments: aiDeployments
+    restoreAiServices: restoreAiServices
     publicNetworkAccess: publicNetworkAccess
   }
 }
@@ -183,9 +125,6 @@ output storageAccountResourceId string = storage.outputs.storageAccountResourceI
 output storageAccountName string = storage.outputs.storageAccountName
 output blobEndpoint string = storage.outputs.blobEndpoint
 output storageContainerNames array = storage.outputs.containerNames
-output customerKeyVaultResourceId string = keyVault.outputs.keyVaultResourceId
-output customerKeyVaultName string = keyVault.outputs.keyVaultName
-output customerKeyVaultUri string = keyVault.outputs.keyVaultUri
 output sqlServerResourceId string = sql.outputs.sqlServerResourceId
 output sqlServerFqdn string = sql.outputs.sqlServerFqdn
 output sqlDatabaseResourceId string = sql.outputs.sqlDatabaseResourceId
