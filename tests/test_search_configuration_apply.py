@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import io
 import unittest
+import uuid
 from unittest.mock import patch
 from urllib.error import HTTPError
 from pathlib import Path
@@ -132,6 +133,7 @@ class SearchConfigurationApplyTests(unittest.TestCase):
         for environment, parameters in (
             ("acc", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}),
             ("tst", {"enableSearchService": False, "publicNetworkAccess": "Enabled"}),
+            ("tst", {"publicNetworkAccess": "Enabled"}),
             ("tst", {"enableSearchService": True, "publicNetworkAccess": "Disabled"}),
         ):
             with self.subTest(environment=environment, parameters=parameters):
@@ -244,3 +246,35 @@ class SearchConfigurationApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_github_outputs_report_only_applied_search_names() -> None:
+    module = load_apply_module(unittest.TestCase())
+    output = ROOT / f".foundation-output-test-{uuid.uuid4().hex}"
+    skipped = ROOT / f".foundation-output-skip-test-{uuid.uuid4().hex}"
+    try:
+        module.write_search_configuration_outputs(
+            output,
+            applied=True,
+            configuration={
+                "indexes": [
+                    {"name": "pilot2-projects"},
+                    {"name": "pilot2-sharepoint-tst"},
+                ],
+                "indexers": [{"name": "pilot2-sql-indexer"}],
+            },
+        )
+        assert output.read_text(encoding="utf-8").splitlines() == [
+            "search_configuration_applied=true",
+            "projects_index_name=pilot2-projects",
+            "sharepoint_index_name=pilot2-sharepoint-tst",
+            "indexer_name=pilot2-sql-indexer",
+        ]
+
+        module.write_search_configuration_outputs(skipped, applied=False)
+        assert skipped.read_text(encoding="utf-8").splitlines() == [
+            "search_configuration_applied=false"
+        ]
+    finally:
+        output.unlink(missing_ok=True)
+        skipped.unlink(missing_ok=True)

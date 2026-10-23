@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ TEMPLATE_FILES = {
     "sqlSkillset": "sql-vector-skillset.json",
     "sqlIndexer": "sql-indexer.json",
 }
+_SEARCH_RESOURCE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 
 
 class SearchConfigurationError(RuntimeError):
@@ -204,9 +206,55 @@ def should_apply_search_configuration(
 ) -> bool:
     return (
         environment == "tst"
-        and foundation_parameters.get("enableSearchService", True) is True
+        and foundation_parameters.get("enableSearchService") is True
         and foundation_parameters.get("publicNetworkAccess") == "Enabled"
     )
+
+
+def write_search_configuration_outputs(
+    path: Path,
+    *,
+    applied: bool,
+    configuration: Mapping[str, object] | None = None,
+) -> None:
+    """Publish only the names from a Search configuration that was applied."""
+    values = {"search_configuration_applied": "true" if applied else "false"}
+    if applied:
+        if not isinstance(configuration, Mapping):
+            raise SearchConfigurationError("applied Search configuration is missing")
+        indexes = configuration.get("indexes")
+        indexers = configuration.get("indexers")
+        if not isinstance(indexes, list) or not isinstance(indexers, list):
+            raise SearchConfigurationError("applied Search configuration is incomplete")
+        if len(indexes) != 2 or len(indexers) != 1:
+            raise SearchConfigurationError("applied Search configuration has an unexpected resource count")
+        try:
+            projects = next(
+                item["name"] for item in indexes
+                if isinstance(item, Mapping) and str(item.get("name", "")).endswith("-projects")
+            )
+            sharepoint = next(
+                item["name"] for item in indexes
+                if isinstance(item, Mapping) and "-sharepoint-" in str(item.get("name", ""))
+            )
+            indexer = indexers[0]["name"]
+        except (KeyError, IndexError, StopIteration, TypeError):
+            raise SearchConfigurationError("applied Search configuration names are missing") from None
+        if any(
+            not isinstance(name, str) or _SEARCH_RESOURCE_NAME.fullmatch(name) is None
+            for name in (projects, sharepoint, indexer)
+        ):
+            raise SearchConfigurationError("applied Search configuration has an invalid resource name")
+        values.update(
+            {
+                "projects_index_name": projects,
+                "sharepoint_index_name": sharepoint,
+                "indexer_name": indexer,
+            }
+        )
+    with path.open("a", encoding="utf-8") as output:
+        for name, value in values.items():
+            output.write(f"{name}={value}\n")
 
 
 def _require_success(response: SearchResponse, method: str, collection: str, name: str) -> None:
@@ -348,6 +396,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resolved-file", required=True, type=Path)
     parser.add_argument("--deployment-outputs-file", required=True, type=Path)
+    parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
 
     try:
@@ -361,6 +410,8 @@ def main() -> int:
             print(
                 "Skipping Search JSON apply; it is enabled only for TST with Search and public access enabled."
             )
+            if args.github_output:
+                write_search_configuration_outputs(args.github_output, applied=False)
             return 0
 
         customer_code = resolved.get("customerId")
@@ -380,6 +431,12 @@ def main() -> int:
         endpoint = _deployment_output(outputs, "searchEndpoint")
         client = SearchRestClient(endpoint, DEFAULT_API_VERSION)
         apply_search_configuration(configuration, client.request)
+        if args.github_output:
+            write_search_configuration_outputs(
+                args.github_output,
+                applied=True,
+                configuration=configuration,
+            )
     except (OSError, json.JSONDecodeError, SearchConfigurationError) as error:
         print(f"Search configuration apply failed: {error}", file=sys.stderr)
         return 1

@@ -25,6 +25,12 @@ _REQUIRED_FOUNDATION_PARAMETERS = frozenset(
         "storageNetworkDefaultAction",
     }
 )
+_EXPECTED_AI_DEPLOYMENTS = (
+    ("gpt-5", "gpt-5"),
+    ("gpt-5.4", "gpt-5.4"),
+    ("gpt-5-mini", "gpt-5-mini"),
+    ("text-embedding-3-large", "text-embedding-3-large"),
+)
 
 
 def _uuid(value: Any, field: str) -> str:
@@ -75,6 +81,8 @@ def _validate_foundation_parameters(
     for field in ("sqlEntraOnlyAuthentication",):
         if type(parameters[field]) is not bool:
             raise ValueError(f"foundationParameters.{field} must be a JSON boolean")
+    if "enableSearchService" in parameters and type(parameters["enableSearchService"]) is not bool:
+        raise ValueError("foundationParameters.enableSearchService must be a JSON boolean")
 
     if not isinstance(parameters["sqlEntraAdministratorLogin"], str) or not parameters[
         "sqlEntraAdministratorLogin"
@@ -99,6 +107,22 @@ def _validate_foundation_parameters(
     deployments = parameters["aiDeployments"]
     if not isinstance(deployments, list) or any(not isinstance(item, dict) for item in deployments):
         raise ValueError("foundationParameters.aiDeployments must be an array of objects")
+    if len(deployments) != len(_EXPECTED_AI_DEPLOYMENTS):
+        raise ValueError(
+            "foundationParameters.aiDeployments must contain exactly the four deployments "
+            "required by the Bicep output aliases"
+        )
+    for index, (expected_name, expected_model) in enumerate(_EXPECTED_AI_DEPLOYMENTS):
+        deployment = deployments[index]
+        if deployment.get("name") != expected_name:
+            raise ValueError(
+                f"foundationParameters.aiDeployments[{index}].name must be {expected_name!r} "
+                "because main.bicep maps outputs by deployment order"
+            )
+        if deployment.get("model") != expected_model:
+            raise ValueError(
+                f"foundationParameters.aiDeployments[{index}].model must be {expected_model!r}"
+            )
     if not isinstance(parameters["additionalTags"], dict):
         raise ValueError("foundationParameters.additionalTags must be an object")
     if parameters["publicNetworkAccess"] not in ("Enabled", "Disabled"):

@@ -181,8 +181,10 @@ jobs:
         run: |
           set -euo pipefail
           PARAM_FILE="infra/customer-foundation/environments/.customer-foundation-${GITHUB_RUN_ID}.bicepparam"
+          RAW_OUTPUTS_FILE="${RUNNER_TEMP}/customer-foundation-deployment-outputs-raw.json"
+          SAFE_OUTPUTS_FILE="${GITHUB_WORKSPACE}/customer-foundation-deployment-outputs.json"
           RESOLVED_FILE="${RUNNER_TEMP}/resolved-customer-foundation.json"
-          trap 'rm -f "$PARAM_FILE" "$RESOLVED_FILE"' EXIT
+          trap 'rm -f "$PARAM_FILE" "$RESOLVED_FILE" "$RAW_OUTPUTS_FILE"' EXIT
           python3 -m scripts.pipeline.resolve_foundation_customer \
             --catalog "$CATALOG_PATH" \
             --customer-id "$CUSTOMER_ID" \
@@ -205,12 +207,51 @@ jobs:
             --location "$DEPLOYMENT_LOCATION" \
             --template-file "$FOUNDATION_TEMPLATE" \
             --output none
+          az deployment sub show \
+            --name "$FOUNDATION_DEPLOYMENT_NAME" \
+            --query properties.outputs \
+            --output json \
+            --only-show-errors > "$RAW_OUTPUTS_FILE"
+          python3 - "$RAW_OUTPUTS_FILE" "$SAFE_OUTPUTS_FILE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          outputs = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = (
+              "sqlServerFqdn",
+              "sqlDatabaseName",
+              "searchEndpoint",
+              "aiEndpoint",
+              "documentIntelligenceEndpoint",
+              "gpt54DeploymentName",
+              "gpt5MiniDeploymentName",
+              "textEmbedding3LargeDeploymentName",
+          )
+          safe = {name: outputs[name] for name in expected if name in outputs}
+          Path(sys.argv[2]).write_text(
+              json.dumps(safe, separators=(",", ":")), encoding="utf-8"
+          )
+          PY
+
+      - name: Save safe deployment outputs for the completion summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-foundation-outputs-${{ github.run_id }}
+          path: customer-foundation-deployment-outputs.json
+          if-no-files-found: error
+          retention-days: 1
 
   customer_foundation_search_configuration:
     name: Apply Azure AI Search configuration
     needs: [resolve, customer_foundation_apply]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' }}
     runs-on: ubuntu-latest
+    outputs:
+      search_configuration_applied: ${{ steps.apply.outputs.search_configuration_applied }}
+      projects_index_name: ${{ steps.apply.outputs.projects_index_name }}
+      sharepoint_index_name: ${{ steps.apply.outputs.sharepoint_index_name }}
+      indexer_name: ${{ steps.apply.outputs.indexer_name }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -223,6 +264,7 @@ jobs:
           subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
 
       - name: Apply Search JSON
+        id: apply
         env:
           CUSTOMER_ID: ${{ inputs.customer_id }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
@@ -246,13 +288,75 @@ jobs:
             --only-show-errors > "$OUTPUTS_FILE"
           python3 -m scripts.pipeline.search_configuration_apply \
             --resolved-file "$RESOLVED_FILE" \
-            --deployment-outputs-file "$OUTPUTS_FILE"
+            --deployment-outputs-file "$OUTPUTS_FILE" \
+            --github-output "$GITHUB_OUTPUT"
 
   customer_foundation_complete:
     needs: [resolve, customer_foundation_apply, customer_foundation_search_configuration]
     if: ${{ needs.resolve.result == 'success' && needs.customer_foundation_apply.result == 'success' && needs.customer_foundation_search_configuration.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Confirm customer foundation workflow completed
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download applied foundation outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: customer-foundation-outputs-${{ github.run_id }}
+          path: ${{ runner.temp }}/customer-foundation-outputs
+
+      - name: Resolve the applied customer configuration
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_REF_TYPE: ${{ github.ref_type }}
         shell: bash
-        run: echo "Customer foundation deployment completed successfully."
+        run: |
+          set -euo pipefail
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog "$CATALOG_PATH" \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --ref-type "$INPUT_REF_TYPE" \
+            > "$RUNNER_TEMP/resolved-customer-foundation.json"
+
+      - name: Publish safe customer foundation handoff
+        env:
+          SEARCH_CONFIGURATION_APPLIED: ${{ needs.customer_foundation_search_configuration.outputs.search_configuration_applied }}
+          PROJECTS_INDEX_NAME: ${{ needs.customer_foundation_search_configuration.outputs.projects_index_name }}
+          SHAREPOINT_INDEX_NAME: ${{ needs.customer_foundation_search_configuration.outputs.sharepoint_index_name }}
+          INDEXER_NAME: ${{ needs.customer_foundation_search_configuration.outputs.indexer_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --resolved-file "$RUNNER_TEMP/resolved-customer-foundation.json"
+            --deployment-outputs-file "$RUNNER_TEMP/customer-foundation-outputs/customer-foundation-deployment-outputs.json"
+            --search-configuration-applied "$SEARCH_CONFIGURATION_APPLIED"
+          )
+          if [[ "$SEARCH_CONFIGURATION_APPLIED" == "true" ]]; then
+            SEARCH_NAMES_FILE="$RUNNER_TEMP/customer-foundation-search-names.json"
+            python3 - "$SEARCH_NAMES_FILE" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          names = {
+              "projectsIndexName": os.environ["PROJECTS_INDEX_NAME"],
+              "sharepointIndexName": os.environ["SHAREPOINT_INDEX_NAME"],
+              "indexerName": os.environ["INDEXER_NAME"],
+          }
+          Path(sys.argv[1]).write_text(json.dumps(names), encoding="utf-8")
+          PY
+            args+=(--search-index-names-file "$SEARCH_NAMES_FILE")
+          fi
+          {
+            echo '### Customer foundation handoff'
+            echo
+            echo 'Copy this JSON into the protected `hydrate-vault` phase in SDB-Calculation-v2.'
+            echo
+            echo '```json'
+            python3 -m scripts.pipeline.customer_foundation_manifest "${args[@]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
