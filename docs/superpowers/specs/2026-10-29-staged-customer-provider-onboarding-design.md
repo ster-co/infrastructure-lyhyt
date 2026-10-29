@@ -1,7 +1,7 @@
 # Staged customer and provider onboarding
 
 **Date:** 2026-10-29  
-**Status:** Approved design; pending written-spec review
+**Status:** Revised design; pending review
 
 ## Goal
 
@@ -24,7 +24,9 @@ the split preserves that checkpoint.
 `.github/workflows/customer-foundation.yml` is already a standalone customer
 foundation workflow, but it currently ends after Bicep apply and Search
 configuration. It does not run the SQL setup required by the combined
-onboarding path.
+onboarding path. Its deployment name currently includes the region code, while
+the combined lifecycle uses the customer/environment name without the region
+code when reading the deployment outputs.
 
 ## Workflow design
 
@@ -50,12 +52,14 @@ provider resources or application code.
 ### Stage 2: Provider onboarding
 
 Add a manually dispatched provider onboarding workflow. Inputs identify the
-customer, environment, pinned release, and successful Stage 1 run ID. Before
-any provider apply, verify that the supplied run succeeded in the customer
-foundation workflow and that its run title matches the customer, environment,
-and release inputs. Re-resolve the authoritative catalogs and read the stable
-customer foundation deployment outputs from Azure; do not pass secrets or rely
-on cross-run output artifacts.
+customer, environment, and pinned release; there is no Stage 1 run ID input.
+Give the customer foundation workflow a run title containing those same
+customer, environment, and release values. Before any provider apply, query
+Actions history for a successful customer foundation run with the matching
+workflow, branch, and title. Grant this read-only lookup `actions: read` and
+fail if no matching success exists. Re-resolve the authoritative catalogs and
+read the customer foundation deployment outputs from Azure; do not pass
+secrets or rely on cross-run output artifacts.
 
 After the preflight, continue the existing provider-side sequence:
 
@@ -79,6 +83,10 @@ its existing release behavior and cross-tenant target validation.
 
 Use one customer/environment concurrency group across the customer foundation,
 provider onboarding, and release workflows so their deployments cannot race.
+Use the deployment name `customer-foundation-${customer_id}-${environment}` in
+both onboarding stages, matching the existing lifecycle migration and release
+lookups. The deployment record name change does not change Azure resource names;
+the Bicep templates and customer resource names stay unchanged.
 
 ## Catalogs, identity, and deployment contracts
 
@@ -89,17 +97,21 @@ provider onboarding, and release workflows so their deployments cannot race.
 - Customer foundation and SQL jobs continue using the customer Entra identity.
 - Provider foundation/runtime jobs continue using the provider identity and
   protected provider environments.
-- Stable deployment names and current Bicep templates remain unchanged.
+- The customer foundation deployment name matches the lifecycle release
+  contract; current Bicep templates and customer resource names remain
+  unchanged.
 - The Stage 2 handoff uses existing safe deployment outputs; secrets remain in
   their current protected stores and never enter workflow inputs or artifacts.
 
 ## Failure handling and operator flow
 
-Operators finish Stage 1 and record its run ID before dispatching Stage 2 with
-the same customer, environment, and release. Stage 2 fails before provider
-changes if the run is missing, failed, belongs to another workflow, or does not
-match those inputs. Stable Azure deployment names and idempotent apply steps
-allow a failed stage to be rerun after its prerequisite is corrected.
+Operators finish Stage 1 before dispatching Stage 2 with the same customer,
+environment, and release. Stage 2 automatically finds and validates the
+successful Stage 1 run, so operators do not copy a run ID. It fails before
+provider changes if no successful matching run exists or if the customer
+foundation deployment or required outputs are missing. Stable Azure deployment
+names and idempotent apply steps allow a failed stage to be rerun after its
+prerequisite is corrected.
 
 Update `docs/customer-lifecycle.md` to describe the two dispatches, required
 inputs, approval checkpoints, and release-only lifecycle path. Do not change
