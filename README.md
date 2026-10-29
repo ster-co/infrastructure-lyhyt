@@ -2,6 +2,11 @@
 
 Azure Bicep templates for the LYHYT shared platform, customer foundation, and customer runtime resources.
 
+Use the [customer lifecycle guide](docs/customer-lifecycle.md) and the
+`Customer lifecycle` GitHub Actions workflow as the coordinated entrypoint for
+customer onboarding and later application releases. Older standalone workflows
+remain available for reviewed maintenance and migration runs.
+
 ## Repository layout
 
 - `infra/lyhyt-platform/` provisions the shared platform resource group, Azure Container Registry, and optional shared platform Key Vault.

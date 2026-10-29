@@ -1,37 +1,49 @@
 param aiServicesName string
 param documentIntelligenceName string
-param location string
+param aiProjectName string
+param aiLocation string
+param documentIntelligenceLocation string
 param tags object
 param deployments array
+param aiSkuName string
+param documentIntelligenceSkuName string
+param aiNetworkSettings object
+param documentIntelligenceNetworkSettings object
 param restoreAiServices bool = false
-
-@allowed([
-  'Enabled'
-  'Disabled'
-])
-param publicNetworkAccess string = 'Enabled'
 
 resource aiServices 'Microsoft.CognitiveServices/accounts@2026-05-15-preview' = {
   name: aiServicesName
-  location: location
+  location: aiLocation
   tags: tags
   kind: 'AIServices'
   identity: {
     type: 'SystemAssigned'
   }
   sku: {
-    name: 'S0'
+    name: aiSkuName
   }
   properties: {
     restore: restoreAiServices
     allowProjectManagement: true
     customSubDomainName: aiServicesName
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: aiNetworkSettings.defaultAction
       ipRules: []
       virtualNetworkRules: []
     }
-    publicNetworkAccess: publicNetworkAccess
+    publicNetworkAccess: aiNetworkSettings.publicNetworkAccess
+  }
+}
+
+resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2026-05-15-preview' = {
+  parent: aiServices
+  name: aiProjectName
+  location: aiLocation
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    displayName: aiProjectName
   }
 }
 
@@ -43,7 +55,7 @@ resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2026
     capacity: deployment.capacity
     name: deployment.skuName
   }
-  properties: {
+  properties: union({
     deploymentState: 'Running'
     model: {
       format: deployment.format
@@ -52,33 +64,36 @@ resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2026
     }
     raiPolicyName: deployment.raiPolicyName
     versionUpgradeOption: deployment.versionUpgradeOption
-  }
+  }, contains(deployment, 'serviceTier') ? {
+    serviceTier: deployment.serviceTier
+  } : {})
 }]
 
 resource documentIntelligence 'Microsoft.CognitiveServices/accounts@2026-05-15-preview' = {
   name: documentIntelligenceName
-  location: location
+  location: documentIntelligenceLocation
   tags: tags
   kind: 'FormRecognizer'
   identity: {
     type: 'None'
   }
   sku: {
-    name: 'S0'
+    name: documentIntelligenceSkuName
   }
   properties: {
     allowProjectManagement: false
     customSubDomainName: documentIntelligenceName
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: documentIntelligenceNetworkSettings.defaultAction
       ipRules: []
       virtualNetworkRules: []
     }
-    publicNetworkAccess: publicNetworkAccess
+    publicNetworkAccess: documentIntelligenceNetworkSettings.publicNetworkAccess
   }
 }
 
 output aiServicesResourceId string = aiServices.id
+output aiProjectResourceId string = aiProject.id
 output aiEndpoint string = 'https://${aiServices.name}.cognitiveservices.azure.com/'
 output documentIntelligenceResourceId string = documentIntelligence.id
 output documentIntelligenceEndpoint string = 'https://${documentIntelligence.name}.cognitiveservices.azure.com/'

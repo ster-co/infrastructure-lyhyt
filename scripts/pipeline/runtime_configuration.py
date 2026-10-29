@@ -267,7 +267,7 @@ def build_runtime_configuration(
     set_output("azure-openai-endpoint", "aiEndpoint", endpoint=True)
     set_output("azure-search-service-endpoint", "searchEndpoint", endpoint=True)
     set_output("llm-model-full", "gpt54DeploymentName")
-    set_output("llm-model-fast", "gpt5MiniDeploymentName")
+    set_output("llm-model-fast", "gpt41MiniDeploymentName")
     set_output("azure-embedding-deployment", "textEmbedding3LargeDeploymentName")
     if tenant_id is not None:
         values["sp-tenant-id"] = RuntimeValue(tenant_id, True)

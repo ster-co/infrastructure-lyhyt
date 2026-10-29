@@ -21,7 +21,8 @@ _OPTIONAL_FOUNDATION_OUTPUT_NAMES = (
     "documentIntelligenceEndpoint",
     "gpt5DeploymentName",
     "gpt54DeploymentName",
-    "gpt5MiniDeploymentName",
+    "gpt41MiniDeploymentName",
+    "gpt41NanoDeploymentName",
     "textEmbedding3LargeDeploymentName",
 )
 _PLATFORM_OUTPUT_NAMES = (
@@ -75,7 +76,8 @@ class FoundationOutputs:
     document_intelligence_endpoint: str = ""
     gpt5_deployment_name: str = ""
     gpt54_deployment_name: str = ""
-    gpt5_mini_deployment_name: str = ""
+    gpt41_mini_deployment_name: str = ""
+    gpt41_nano_deployment_name: str = ""
     text_embedding3_large_deployment_name: str = ""
 
     def to_safe_dict(self) -> dict[str, str]:
@@ -92,7 +94,8 @@ class FoundationOutputs:
             "documentIntelligenceEndpoint": self.document_intelligence_endpoint,
             "gpt5DeploymentName": self.gpt5_deployment_name,
             "gpt54DeploymentName": self.gpt54_deployment_name,
-            "gpt5MiniDeploymentName": self.gpt5_mini_deployment_name,
+            "gpt41MiniDeploymentName": self.gpt41_mini_deployment_name,
+            "gpt41NanoDeploymentName": self.gpt41_nano_deployment_name,
             "textEmbedding3LargeDeploymentName": self.text_embedding3_large_deployment_name,
         }
 
@@ -130,7 +133,8 @@ def extract_foundation_outputs(raw_outputs: dict[str, object]) -> FoundationOutp
         ),
         gpt5_deployment_name=_optional_output_value(raw_outputs, "gpt5DeploymentName"),
         gpt54_deployment_name=_optional_output_value(raw_outputs, "gpt54DeploymentName"),
-        gpt5_mini_deployment_name=_optional_output_value(raw_outputs, "gpt5MiniDeploymentName"),
+        gpt41_mini_deployment_name=_optional_output_value(raw_outputs, "gpt41MiniDeploymentName"),
+        gpt41_nano_deployment_name=_optional_output_value(raw_outputs, "gpt41NanoDeploymentName"),
         text_embedding3_large_deployment_name=_optional_output_value(
             raw_outputs, "textEmbedding3LargeDeploymentName"
         ),

@@ -14,12 +14,27 @@ _SAFE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _CUSTOMER_CODE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,10}[a-z0-9])")
 _REQUIRED_FOUNDATION_PARAMETERS = frozenset(
     {
+        "customerResourceGroupName",
+        "resourceNames",
         "sqlEntraAdministratorLogin",
         "sqlEntraAdministratorObjectId",
         "sqlEntraAdministratorTenantId",
         "sqlEntraOnlyAuthentication",
+        "serviceLocations",
         "storageContainerNames",
         "aiDeployments",
+        "aiSkuName",
+        "documentIntelligenceSkuName",
+        "searchSkuName",
+        "searchReplicaCount",
+        "searchPartitionCount",
+        "searchSemanticSearch",
+        "storageSkuName",
+        "sqlDatabaseSku",
+        "sqlDatabaseBackupRedundancy",
+        "sqlDatabaseZoneRedundant",
+        "sqlDatabaseReadScale",
+        "networkSettings",
         "additionalTags",
         "publicNetworkAccess",
         "storageNetworkDefaultAction",
@@ -28,9 +43,12 @@ _REQUIRED_FOUNDATION_PARAMETERS = frozenset(
 _EXPECTED_AI_DEPLOYMENTS = (
     ("gpt-5", "gpt-5"),
     ("gpt-5.4", "gpt-5.4"),
-    ("gpt-5-mini", "gpt-5-mini"),
+    ("gpt-4.1-mini", "gpt-4.1-mini"),
+    ("gpt-4.1-nano", "gpt-4.1-nano"),
     ("text-embedding-3-large", "text-embedding-3-large"),
 )
+_SERVICE_LOCATIONS = ("ai", "documentIntelligence", "search", "sql", "storage")
+_NETWORK_SERVICES = ("ai", "documentIntelligence", "sql", "search", "storage")
 
 
 def _uuid(value: Any, field: str) -> str:
@@ -88,6 +106,28 @@ def _validate_foundation_parameters(
         "sqlEntraAdministratorLogin"
     ].strip():
         raise ValueError("foundationParameters.sqlEntraAdministratorLogin must be non-empty")
+    _safe_name(
+        parameters["customerResourceGroupName"],
+        "foundationParameters.customerResourceGroupName",
+    )
+    resource_names = parameters["resourceNames"]
+    required_resource_names = {
+        "aiServices",
+        "aiProject",
+        "documentIntelligence",
+        "search",
+        "sqlServer",
+        "sqlDatabase",
+        "storageAccount",
+    }
+    if not isinstance(resource_names, dict) or set(resource_names) != required_resource_names:
+        raise ValueError("foundationParameters.resourceNames must contain the seven named foundation resources")
+    for key, value in resource_names.items():
+        if key == "storageAccount":
+            if not isinstance(value, str) or re.fullmatch(r"[a-z0-9]{3,24}", value) is None:
+                raise ValueError("foundationParameters.resourceNames.storageAccount must be 3-24 lowercase alphanumeric characters")
+        else:
+            _safe_name(value, f"foundationParameters.resourceNames.{key}")
     admin_tenant = _uuid(
         parameters["sqlEntraAdministratorTenantId"],
         "foundationParameters.sqlEntraAdministratorTenantId",
@@ -109,7 +149,7 @@ def _validate_foundation_parameters(
         raise ValueError("foundationParameters.aiDeployments must be an array of objects")
     if len(deployments) != len(_EXPECTED_AI_DEPLOYMENTS):
         raise ValueError(
-            "foundationParameters.aiDeployments must contain exactly the four deployments "
+            "foundationParameters.aiDeployments must contain exactly the five deployments "
             "required by the Bicep output aliases"
         )
     for index, (expected_name, expected_model) in enumerate(_EXPECTED_AI_DEPLOYMENTS):
@@ -123,12 +163,68 @@ def _validate_foundation_parameters(
             raise ValueError(
                 f"foundationParameters.aiDeployments[{index}].model must be {expected_model!r}"
             )
+        if not isinstance(deployment.get("version"), str) or not deployment["version"].strip():
+            raise ValueError(f"foundationParameters.aiDeployments[{index}].version must be non-empty")
+        if not isinstance(deployment.get("skuName"), str) or not deployment["skuName"].strip():
+            raise ValueError(f"foundationParameters.aiDeployments[{index}].skuName must be non-empty")
+        if type(deployment.get("capacity")) is not int or deployment["capacity"] < 1:
+            raise ValueError(f"foundationParameters.aiDeployments[{index}].capacity must be a positive integer")
+
+    locations = parameters["serviceLocations"]
+    if not isinstance(locations, dict):
+        raise ValueError("foundationParameters.serviceLocations must be an object")
+    missing_locations = sorted(set(_SERVICE_LOCATIONS) - locations.keys())
+    if missing_locations:
+        raise ValueError("foundationParameters.serviceLocations missing: " + ", ".join(missing_locations))
+    for service in _SERVICE_LOCATIONS:
+        _safe_name(locations[service], f"foundationParameters.serviceLocations.{service}")
+
+    for field in ("aiSkuName", "documentIntelligenceSkuName", "searchSkuName", "storageSkuName"):
+        if not isinstance(parameters[field], str) or not parameters[field].strip():
+            raise ValueError(f"foundationParameters.{field} must be non-empty")
+    for field in ("searchReplicaCount", "searchPartitionCount"):
+        if type(parameters[field]) is not int or parameters[field] < 1:
+            raise ValueError(f"foundationParameters.{field} must be a positive integer")
+    if parameters["searchSemanticSearch"] not in ("free", "standard"):
+        raise ValueError("foundationParameters.searchSemanticSearch must be free or standard")
+
+    sql_sku = parameters["sqlDatabaseSku"]
+    if not isinstance(sql_sku, dict):
+        raise ValueError("foundationParameters.sqlDatabaseSku must be an object")
+    for field in ("name", "tier", "family"):
+        if not isinstance(sql_sku.get(field), str) or not sql_sku[field].strip():
+            raise ValueError(f"foundationParameters.sqlDatabaseSku.{field} must be non-empty")
+    if type(sql_sku.get("capacity")) is not int or sql_sku["capacity"] < 1:
+        raise ValueError("foundationParameters.sqlDatabaseSku.capacity must be a positive integer")
+    if parameters["sqlDatabaseBackupRedundancy"] not in ("Local", "Zone", "Geo", "GeoZone"):
+        raise ValueError("foundationParameters.sqlDatabaseBackupRedundancy is not supported")
+    if type(parameters["sqlDatabaseZoneRedundant"]) is not bool:
+        raise ValueError("foundationParameters.sqlDatabaseZoneRedundant must be a JSON boolean")
+    if parameters["sqlDatabaseReadScale"] not in ("Enabled", "Disabled"):
+        raise ValueError("foundationParameters.sqlDatabaseReadScale must be Enabled or Disabled")
+
+    network = parameters["networkSettings"]
+    if not isinstance(network, dict):
+        raise ValueError("foundationParameters.networkSettings must be an object")
+    missing_network = sorted(set(_NETWORK_SERVICES) - network.keys())
+    if missing_network:
+        raise ValueError("foundationParameters.networkSettings missing: " + ", ".join(missing_network))
+    for service in _NETWORK_SERVICES:
+        settings = network[service]
+        if not isinstance(settings, dict):
+            raise ValueError(f"foundationParameters.networkSettings.{service} must be an object")
+        if settings.get("publicNetworkAccess") not in ("Enabled", "Disabled"):
+            raise ValueError(f"foundationParameters.networkSettings.{service}.publicNetworkAccess must be Enabled or Disabled")
+        if service in ("ai", "documentIntelligence", "storage") and settings.get("defaultAction") not in ("Allow", "Deny"):
+            raise ValueError(f"foundationParameters.networkSettings.{service}.defaultAction must be Allow or Deny")
     if not isinstance(parameters["additionalTags"], dict):
         raise ValueError("foundationParameters.additionalTags must be an object")
     if parameters["publicNetworkAccess"] not in ("Enabled", "Disabled"):
         raise ValueError("foundationParameters.publicNetworkAccess must be Enabled or Disabled")
     if parameters["storageNetworkDefaultAction"] not in ("Allow", "Deny"):
         raise ValueError("foundationParameters.storageNetworkDefaultAction must be Allow or Deny")
+    if parameters["networkSettings"]["storage"]["defaultAction"] != parameters["storageNetworkDefaultAction"]:
+        raise ValueError("storageNetworkDefaultAction must match networkSettings.storage.defaultAction")
     return parameters
 
 

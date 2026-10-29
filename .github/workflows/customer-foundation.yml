@@ -111,6 +111,16 @@ jobs:
           tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
           subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
 
+      - name: Confirm customer tenant and subscription for what-if
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(az account show --query tenantId -o tsv)" = "$EXPECTED_TENANT_ID"
+          test "$(az account show --query id -o tsv)" = "$EXPECTED_SUBSCRIPTION_ID"
+
       - name: Validate customer foundation what-if
         env:
           CUSTOMER_ID: ${{ inputs.customer_id }}
@@ -170,6 +180,16 @@ jobs:
           tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
           subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
 
+      - name: Confirm customer tenant and subscription for apply
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(az account show --query tenantId -o tsv)" = "$EXPECTED_TENANT_ID"
+          test "$(az account show --query id -o tsv)" = "$EXPECTED_SUBSCRIPTION_ID"
+
       - name: Apply customer foundation
         env:
           CUSTOMER_ID: ${{ inputs.customer_id }}
@@ -219,13 +239,16 @@ jobs:
 
           outputs = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           expected = (
+              "createdCustomerResourceGroupName",
               "sqlServerFqdn",
               "sqlDatabaseName",
               "searchEndpoint",
               "aiEndpoint",
               "documentIntelligenceEndpoint",
+              "gpt5DeploymentName",
               "gpt54DeploymentName",
-              "gpt5MiniDeploymentName",
+              "gpt41MiniDeploymentName",
+              "gpt41NanoDeploymentName",
               "textEmbedding3LargeDeploymentName",
           )
           safe = {name: outputs[name] for name in expected if name in outputs}
@@ -262,6 +285,16 @@ jobs:
           client-id: ${{ needs.resolve.outputs.migration_application_client_id }}
           tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
           subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+
+      - name: Confirm customer tenant and subscription for Search
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(az account show --query tenantId -o tsv)" = "$EXPECTED_TENANT_ID"
+          test "$(az account show --query id -o tsv)" = "$EXPECTED_SUBSCRIPTION_ID"
 
       - name: Apply Search JSON
         id: apply

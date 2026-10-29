@@ -1,9 +1,50 @@
 using '../main.bicep'
 
-param customerCode = 'pilot'
+param customerCode = 'lyhyt-demo'
 param environment = 'tst'
 param location = 'swedencentral'
 param regionCode = 'swec'
+param customerResourceGroupName = 'rg-lyhyt-demo'
+param resourceNames = {
+  aiServices: 'lyhyt-ai'
+  aiProject: 'proj-lyhyt'
+  documentIntelligence: 'lyhyt-demo-di'
+  search: 'lyhyt-demo-search'
+  sqlServer: 'lyhyt-demo'
+  sqlDatabase: 'lyhyt-demo-calculation'
+  storageAccount: 'lyhytdemostorage'
+}
+
+param serviceLocations = {
+  ai: 'swedencentral'
+  documentIntelligence: 'swedencentral'
+  search: 'francecentral'
+  sql: 'swedencentral'
+  storage: 'francecentral'
+}
+param aiSkuName = 'S0'
+param documentIntelligenceSkuName = 'S0'
+param searchSkuName = 'basic'
+param searchReplicaCount = 1
+param searchPartitionCount = 1
+param searchSemanticSearch = 'free'
+param storageSkuName = 'Standard_GRS'
+param sqlDatabaseSku = {
+  name: 'HS_Gen5_2'
+  tier: 'Hyperscale'
+  family: 'Gen5'
+  capacity: 2
+}
+param sqlDatabaseBackupRedundancy = 'GeoZone'
+param sqlDatabaseZoneRedundant = true
+param sqlDatabaseReadScale = 'Enabled'
+param networkSettings = {
+  ai: { publicNetworkAccess: 'Enabled', defaultAction: 'Allow' }
+  documentIntelligence: { publicNetworkAccess: 'Enabled', defaultAction: 'Allow' }
+  sql: { publicNetworkAccess: 'Enabled' }
+  search: { publicNetworkAccess: 'Enabled' }
+  storage: { publicNetworkAccess: 'Enabled', defaultAction: 'Allow' }
+}
 
 // Replace these non-secret placeholders with values from the customer tenant.
 param sqlEntraAdministratorLogin = 'replace-with-customer-entra-admin'
@@ -25,7 +66,7 @@ param aiDeployments = [
     format: 'OpenAI'
     version: '2025-08-07'
     skuName: 'GlobalStandard'
-    capacity: 10
+    capacity: 50
     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
     raiPolicyName: 'Microsoft.DefaultV2'
   }
@@ -35,17 +76,27 @@ param aiDeployments = [
     format: 'OpenAI'
     version: '2026-03-05'
     skuName: 'GlobalStandard'
-    capacity: 20
+    capacity: 50
     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
     raiPolicyName: 'Microsoft.DefaultV2'
   }
   {
-    name: 'gpt-5-mini'
-    model: 'gpt-5-mini'
+    name: 'gpt-4.1-mini'
+    model: 'gpt-4.1-mini'
     format: 'OpenAI'
-    version: '2025-08-07'
+    version: '2025-04-14'
     skuName: 'GlobalStandard'
-    capacity: 10
+    capacity: 250
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
+  }
+  {
+    name: 'gpt-4.1-nano'
+    model: 'gpt-4.1-nano'
+    format: 'OpenAI'
+    version: '2025-04-14'
+    skuName: 'GlobalStandard'
+    capacity: 250
     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
     raiPolicyName: 'Microsoft.DefaultV2'
   }
@@ -55,7 +106,7 @@ param aiDeployments = [
     format: 'OpenAI'
     version: '1'
     skuName: 'GlobalStandard'
-    capacity: 25
+    capacity: 150
     versionUpgradeOption: 'NoAutoUpgrade'
     raiPolicyName: 'Microsoft.DefaultV2'
   }

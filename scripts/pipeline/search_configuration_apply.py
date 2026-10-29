@@ -204,10 +204,13 @@ def should_apply_search_configuration(
     environment: object,
     foundation_parameters: Mapping[str, object],
 ) -> bool:
+    network_settings = foundation_parameters.get("networkSettings")
+    search_settings = network_settings.get("search") if isinstance(network_settings, Mapping) else None
     return (
         environment == "tst"
         and foundation_parameters.get("enableSearchService") is True
-        and foundation_parameters.get("publicNetworkAccess") == "Enabled"
+        and isinstance(search_settings, Mapping)
+        and search_settings.get("publicNetworkAccess") == "Enabled"
     )
 
 

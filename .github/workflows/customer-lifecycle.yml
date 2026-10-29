@@ -1,0 +1,1084 @@
+name: Customer lifecycle
+
+run-name: Customer ${{ inputs.operation }} ${{ inputs.customer_id }}/${{ inputs.environment }} at ${{ inputs.release_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: Matching customer ID in infrastructure and app catalogs
+        required: true
+        type: string
+      environment:
+        description: Customer environment
+        required: true
+        type: choice
+        options: [tst, acc, prod]
+      operation:
+        description: Create a new customer foundation/stamp, or release code to an existing one
+        required: true
+        type: choice
+        options: [onboard, release]
+      release_version:
+        description: Immutable coordinated SDB release tag, for example stamp-v2026.10.29.1-lyhyt
+        required: true
+        type: string
+
+concurrency:
+  group: customer-lifecycle-${{ inputs.customer_id }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      customer_tenant_id: ${{ steps.resolve.outputs.customer_tenant_id }}
+      customer_subscription_id: ${{ steps.resolve.outputs.customer_subscription_id }}
+      customer_oidc_client_id: ${{ steps.resolve.outputs.customer_oidc_client_id }}
+      provider_tenant_id: ${{ steps.resolve.outputs.provider_tenant_id }}
+      provider_subscription_id: ${{ steps.resolve.outputs.provider_subscription_id }}
+      provider_oidc_client_id: ${{ steps.resolve.outputs.provider_oidc_client_id }}
+      provider_principal_object_id: ${{ steps.resolve.outputs.provider_principal_object_id }}
+      provider_resource_group: ${{ steps.resolve.outputs.provider_resource_group }}
+      provider_location: ${{ steps.resolve.outputs.provider_location }}
+      provider_github_environment: ${{ steps.resolve.outputs.provider_github_environment }}
+      hostname: ${{ steps.resolve.outputs.hostname }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create read-only SDB catalog token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+
+      - name: Check out the pinned SDB customer catalog
+        uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+
+      - name: Resolve and validate both catalogs
+        id: resolve
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json \
+            --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation "$OPERATION" \
+            --release-version "$RELEASE_VERSION" \
+            --ref-type "$REF_TYPE" > "$resolved"
+          python3 - "$resolved" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          foundation = value["foundation"]
+          stamp = value["providerStamp"]
+          context = stamp["deploymentContext"]
+          outputs = {
+              "customer_tenant_id": foundation["customerTenantId"],
+              "customer_subscription_id": foundation["subscriptionId"],
+              "customer_oidc_client_id": foundation["migration"]["applicationClientId"],
+              "provider_tenant_id": context["providerTenantId"],
+              "provider_subscription_id": context["providerSubscriptionId"],
+              "provider_oidc_client_id": context["providerAutomationClientId"],
+              "provider_principal_object_id": context["providerDeploymentPrincipalObjectId"],
+              "provider_resource_group": stamp["resourceGroup"],
+              "provider_location": stamp["location"],
+              "provider_github_environment": context["githubEnvironment"],
+              "hostname": stamp["hostname"],
+          }
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              for name, item in outputs.items():
+                  output.write(f"{name}={item}\n")
+          PY
+
+      - name: Require a branch ref for lifecycle infrastructure
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "$REF_TYPE" = branch || {
+            echo "Run Customer lifecycle from a protected infrastructure branch." >&2
+            exit 1
+          }
+
+  dns_preflight:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require customer DNS to point at Azure Container Apps
+        env:
+          HOSTNAME: ${{ needs.resolve.outputs.hostname }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(dig +short CNAME "$HOSTNAME" | head -n1 | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+          addresses=$(dig +short A "$HOSTNAME"; dig +short AAAA "$HOSTNAME")
+          if [[ -n "$target" && "$target" != *.azurecontainerapps.io ]]; then
+            echo "Existing CNAME for $HOSTNAME points outside Azure Container Apps; remove or correct the conflicting record." >&2
+            exit 1
+          fi
+          if [[ -z "$target" && -n "$addresses" ]]; then
+            echo "Existing address records for $HOSTNAME conflict with the required CNAME; remove them before onboarding." >&2
+            exit 1
+          fi
+          echo "Hostname syntax and any existing DNS record are acceptable. The exact ACA CNAME is checked after provider foundation creates its environment."
+
+  model_preflight:
+    needs: resolve
+    if: ${{ inputs.operation == 'onboard' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create read-only SDB migration checkout token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - name: Check GitHub OIDC availability
+        run: |
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+      - name: Validate new database migration baseline before provisioning
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_SCHEMA_BASELINE_VERSION: ${{ secrets.CUSTOMER_SCHEMA_BASELINE_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd sdb && python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from infrastructure.scripts.migrate_database import (
+              MigrationError,
+              _load_migrations,
+              baseline_version_for_customer,
+          )
+          baseline = baseline_version_for_customer(
+              os.environ.get("CUSTOMER_SCHEMA_BASELINE_VERSION"),
+              os.environ["CUSTOMER_ID"],
+          )
+          if baseline is None:
+              raise MigrationError("CUSTOMER_SCHEMA_BASELINE_VERSION must define a baseline for a newly provisioned customer database.")
+          migrations = _load_migrations(Path("backend/sql"))
+          if not any(migration.version == baseline or migration.date == baseline for migration in migrations):
+              raise MigrationError(f"customer schema baseline does not match a migration in this release: {baseline}")
+          PY
+          )
+      - name: Log in to the customer tenant
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Confirm the exact customer tenant and subscription
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+      - name: Confirm regional model availability and quota
+        run: |
+          set -euo pipefail
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog config/customers.json \
+            --customer-id "${{ inputs.customer_id }}" \
+            --environment "${{ inputs.environment }}" \
+            --ref-type "${{ github.ref_type }}" > "$RUNNER_TEMP/resolved-customer.json"
+          python3 -m scripts.pipeline.model_capacity --resolved-file "$RUNNER_TEMP/resolved-customer.json"
+
+  foundation_what_if:
+    needs: [resolve, dns_preflight, model_preflight]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.dns_preflight.result == 'success' && needs.model_preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Confirm customer cloud target
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+      - name: Compile and preview customer foundation
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/customer-foundation.json"
+          params="$RUNNER_TEMP/customer-foundation.bicepparam"
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog config/customers.json \
+            --customer-id "$CUSTOMER_ID" \
+            --environment "$CUSTOMER_ENVIRONMENT" \
+            --ref-type "$REF_TYPE" > "$resolved"
+          location=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["location"])' "$resolved")
+          python3 - "$resolved" "$params" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", dict(resolved["foundationParameters"]))
+          PY
+          az bicep lint --file infra/customer-foundation/main.bicep
+          az bicep build --file infra/customer-foundation/main.bicep --stdout >/dev/null
+          az bicep build-params --file "$params" --stdout >/dev/null
+          az deployment sub what-if \
+            --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --location "$location" \
+            --template-file infra/customer-foundation/main.bicep \
+            --parameters "$params"
+
+  foundation_apply:
+    needs: [resolve, foundation_what_if]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.foundation_what_if.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: customer-foundation-apply
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Confirm customer target before foundation apply
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+      - name: Apply the customer foundation
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/customer-foundation.json"
+          params="$RUNNER_TEMP/customer-foundation.bicepparam"
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog config/customers.json --customer-id "$CUSTOMER_ID" \
+            --environment "$CUSTOMER_ENVIRONMENT" --ref-type "$REF_TYPE" > "$resolved"
+          python3 - "$resolved" "$params" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.render_bicepparam import render_bicepparam
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          render_bicepparam(Path(sys.argv[2]), "../main.bicep", dict(resolved["foundationParameters"]))
+          PY
+          location=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["location"])' "$resolved")
+          az deployment sub create \
+            --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --location "$location" \
+            --template-file infra/customer-foundation/main.bicep \
+            --parameters "$params" \
+            --output none
+          az deployment sub show \
+            --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --query properties.outputs --output json > "$RUNNER_TEMP/foundation-outputs.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-foundation-outputs
+          path: ${{ runner.temp }}/foundation-outputs.json
+          retention-days: 1
+
+  sql_migrations:
+    needs: [resolve, foundation_apply]
+    if: ${{ always() && needs.resolve.result == 'success' && (inputs.operation == 'release' || needs.foundation_apply.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB release token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Confirm migration target and load SQL endpoint
+        id: sql
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          az deployment sub show \
+            --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --query properties.outputs --output json > "$RUNNER_TEMP/foundation-outputs.json"
+          python3 - "$RUNNER_TEMP/foundation-outputs.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          from pathlib import Path
+          outputs = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          values = {}
+          for key, output in (("server", "sqlServerFqdn"), ("database", "sqlDatabaseName")):
+              value = outputs.get(output, {}).get("value")
+              if not isinstance(value, str) or not value:
+                  raise SystemExit(f"Foundation output {output} is missing.")
+              values[key] = value
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as file:
+              for key, value in values.items():
+                  file.write(f"{key}={value}\n")
+          PY
+      - name: Install SQL ODBC driver and Python client
+        run: |
+          set -euo pipefail
+          curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -o "$RUNNER_TEMP/packages-microsoft-prod.deb"
+          sudo dpkg -i "$RUNNER_TEMP/packages-microsoft-prod.deb"
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc
+          python -m pip install --disable-pip-version-check --quiet pyodbc
+      - name: Run database migrations using customer Entra identity
+        env:
+          SQL_SERVER: ${{ steps.sql.outputs.server }}
+          SQL_DATABASE: ${{ steps.sql.outputs.database }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_SCHEMA_BASELINE_VERSION: ${{ secrets.CUSTOMER_SCHEMA_BASELINE_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--server "$SQL_SERVER" --database "$SQL_DATABASE" --access-token-env AZURE_SQL_ACCESS_TOKEN)
+          if [[ -n "$CUSTOMER_SCHEMA_BASELINE_VERSION" ]]; then
+            args+=(--baseline-version "$CUSTOMER_SCHEMA_BASELINE_VERSION")
+          fi
+          token=$(az account get-access-token --resource https://database.windows.net/ --query accessToken -o tsv)
+          test -n "$token"
+          (cd sdb && AZURE_SQL_ACCESS_TOKEN="$token" python infrastructure/scripts/migrate_database.py "${args[@]}")
+          unset token
+
+  search_configuration:
+    needs: [resolve, foundation_apply]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.foundation_apply.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Confirm target and apply Search indexes
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          python3 -m scripts.pipeline.resolve_foundation_customer \
+            --catalog config/customers.json --customer-id "$CUSTOMER_ID" \
+            --environment "$CUSTOMER_ENVIRONMENT" --ref-type "$REF_TYPE" > "$RUNNER_TEMP/resolved.json"
+          az deployment sub show \
+            --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --query properties.outputs --output json > "$RUNNER_TEMP/foundation-outputs.json"
+          python3 -m scripts.pipeline.search_configuration_apply \
+            --resolved-file "$RUNNER_TEMP/resolved.json" \
+            --deployment-outputs-file "$RUNNER_TEMP/foundation-outputs.json"
+
+  provider_foundation_what_if:
+    needs: [resolve, dns_preflight, sql_migrations, search_configuration]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.dns_preflight.result == 'success' && needs.sql_migrations.result == 'success' && needs.search_configuration.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB checkout token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Confirm provider tenant and subscription
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+      - name: Compile and preview provider stamp foundation
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+          PROVIDER_PRINCIPAL_ID: ${{ needs.resolve.outputs.provider_principal_object_id }}
+          ACR_NAME: ${{ vars.PROVIDER_ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.PROVIDER_ACR_LOGIN_SERVER }}
+          ACR_RESOURCE_GROUP: ${{ vars.PROVIDER_ACR_RESOURCE_GROUP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation onboard --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          export CUSTOMER_JSON
+          CUSTOMER_JSON=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["providerStamp"]))' "$resolved")
+          workspace=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deploymentContext"]["applicationInsightsWorkspaceResourceId"])' "$resolved")
+          export APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID="$workspace"
+          test -n "$ACR_NAME" && test -n "$ACR_LOGIN_SERVER" && test -n "$ACR_RESOURCE_GROUP"
+          parameter_file="$RUNNER_TEMP/stamp-foundation.json"
+          wrapper_file="$RUNNER_TEMP/provider-stamp-foundation.json"
+          (cd sdb && AZURE_CLIENT_OBJECT_ID="$PROVIDER_PRINCIPAL_ID" python3 -m infrastructure.scripts.build_stamp_parameters \
+            --stage foundation --output "$parameter_file"
+            )
+          python3 - "$parameter_file" "$resolved" "$wrapper_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.provider_deployment import wrap_stamp_parameters
+          stamp_parameters = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          resolved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["providerStamp"]
+          wrapped = wrap_stamp_parameters(
+              stamp_parameters,
+              resource_group_name=resolved["resourceGroup"],
+              location=resolved["location"],
+              customer_id=resolved["id"],
+          )
+          Path(sys.argv[3]).write_text(json.dumps(wrapped), encoding="utf-8")
+          PY
+          az bicep lint --file sdb/infrastructure/provider-stamp-subscription.bicep
+          az bicep build --file sdb/infrastructure/provider-stamp-subscription.bicep --stdout >/dev/null
+          az deployment sub what-if \
+            --name "provider-stamp-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT-foundation" \
+            --location "${{ needs.resolve.outputs.provider_location }}" \
+            --template-file sdb/infrastructure/provider-stamp-subscription.bicep \
+            --parameters "@$wrapper_file"
+
+  provider_foundation_apply:
+    needs: [resolve, provider_foundation_what_if]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.provider_foundation_what_if.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: provider-stamp-apply
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB checkout token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Apply provider hosting and customer deployment identity
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+          PROVIDER_PRINCIPAL_ID: ${{ needs.resolve.outputs.provider_principal_object_id }}
+          ACR_NAME: ${{ vars.PROVIDER_ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.PROVIDER_ACR_LOGIN_SERVER }}
+          ACR_RESOURCE_GROUP: ${{ vars.PROVIDER_ACR_RESOURCE_GROUP }}
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation onboard --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          export CUSTOMER_JSON
+          CUSTOMER_JSON=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["providerStamp"]))' "$resolved")
+          export APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID
+          APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deploymentContext"]["applicationInsightsWorkspaceResourceId"])' "$resolved")
+          parameter_file="$RUNNER_TEMP/stamp-foundation.json"
+          wrapper_file="$RUNNER_TEMP/provider-stamp-foundation.json"
+          (cd sdb && AZURE_CLIENT_OBJECT_ID="$PROVIDER_PRINCIPAL_ID" python3 -m infrastructure.scripts.build_stamp_parameters \
+            --stage foundation --output "$parameter_file"
+            )
+          python3 - "$parameter_file" "$resolved" "$wrapper_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.provider_deployment import wrap_stamp_parameters
+          stamp_parameters = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          resolved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["providerStamp"]
+          wrapped = wrap_stamp_parameters(stamp_parameters, resource_group_name=resolved["resourceGroup"], location=resolved["location"], customer_id=resolved["id"])
+          Path(sys.argv[3]).write_text(json.dumps(wrapped), encoding="utf-8")
+          PY
+          az deployment sub create \
+            --name "provider-stamp-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT-foundation" \
+            --location "${{ needs.resolve.outputs.provider_location }}" \
+            --template-file sdb/infrastructure/provider-stamp-subscription.bicep \
+            --parameters "@$wrapper_file" --output none
+
+  provider_runtime_preflight:
+    needs: [resolve, provider_foundation_apply, provider_prerequisites_ready]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.provider_foundation_apply.result == 'success' && needs.provider_prerequisites_ready.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB catalog token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Confirm provider target, customer DNS, and Key Vault secret names
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation onboard --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          api_app=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deployment"]["containerAppName"])' "$resolved")
+          environment=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deployment"]["managedEnvironmentName"])' "$resolved")
+          hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["hostname"])' "$resolved")
+          default_domain=$(az containerapp env show --name "$environment" --resource-group "${{ needs.resolve.outputs.provider_resource_group }}" --query properties.defaultDomain -o tsv)
+          expected_target="${api_app}.${default_domain}"
+          actual_target=$(dig +short CNAME "$hostname" | head -n1 | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+          test "$actual_target" = "$(printf '%s' "$expected_target" | tr '[:upper:]' '[:lower:]')" || {
+            echo "DNS CNAME must point exactly to $expected_target before managed certificate provisioning." >&2
+            exit 1
+          }
+          vault=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deployment"]["keyVaultName"])' "$resolved")
+          for attempt in $(seq 1 12); do
+            az keyvault secret list --vault-name "$vault" --query '[].name' --output json > "$RUNNER_TEMP/secret-names.json" && break
+            sleep 10
+          done
+          python3 - "$resolved" "$RUNNER_TEMP/secret-names.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.provider_deployment import validate_required_secret_names
+          resolved = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          app = resolved["application"]
+          names = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          missing = validate_required_secret_names(app["requiredKeyVaultSecretNames"], names)
+          if missing:
+              raise SystemExit("Key Vault is missing required secret names (values are never read): " + ", ".join(missing))
+          generated_missing = sorted({"document-parser-code", "extraction-code"} - set(names))
+          Path(sys.argv[2]).write_text(json.dumps(names), encoding="utf-8")
+          Path(sys.argv[2] + ".generated-missing").write_text(json.dumps(generated_missing), encoding="utf-8")
+          PY
+          printf '%s' 'not-configured' > "$RUNNER_TEMP/generated-key-placeholder"
+          while IFS= read -r secret_name; do
+            [ -n "$secret_name" ] || continue
+            az keyvault secret set --vault-name "$vault" --name "$secret_name" --file "$RUNNER_TEMP/generated-key-placeholder" --output none
+          done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))))' "$RUNNER_TEMP/secret-names.json.generated-missing")
+
+  provider_prerequisites_ready:
+    name: Confirm customer DNS and Key Vault prerequisites are ready
+    needs: [resolve, provider_foundation_apply]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.provider_foundation_apply.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: provider-prerequisites-ready
+    steps:
+      - name: Confirm DNS and Key Vault prerequisites are ready for runtime what-if
+        env:
+          CUSTOMER_HOSTNAME: ${{ needs.resolve.outputs.hostname }}
+          PROVIDER_RESOURCE_GROUP: ${{ needs.resolve.outputs.provider_resource_group }}
+        run: |
+          {
+            echo '### Provider prerequisites'
+            echo
+            echo 'Before approving this checkpoint, add the required customer secret values to the provider Key Vault and point the customer API CNAME at the new Container Apps environment default domain.'
+            echo "Hostname: $CUSTOMER_HOSTNAME"
+            echo "Provider resource group: $PROVIDER_RESOURCE_GROUP"
+            echo 'The following runtime preflight verifies secret names only and checks the exact CNAME target. It never reads or logs secret values.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  provider_runtime_what_if:
+    needs: [resolve, provider_runtime_preflight]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.provider_runtime_preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB checkout token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Confirm provider tenant and subscription
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+      - name: Compile and preview provider runtime configuration
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+          PROVIDER_PRINCIPAL_ID: ${{ needs.resolve.outputs.provider_principal_object_id }}
+          ACR_NAME: ${{ vars.PROVIDER_ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.PROVIDER_ACR_LOGIN_SERVER }}
+          ACR_RESOURCE_GROUP: ${{ vars.PROVIDER_ACR_RESOURCE_GROUP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation onboard --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          export CUSTOMER_JSON
+          CUSTOMER_JSON=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["providerStamp"]))' "$resolved")
+          export APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID
+          APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deploymentContext"]["applicationInsightsWorkspaceResourceId"])' "$resolved")
+          parameter_file="$RUNNER_TEMP/stamp-runtime.json"
+          wrapper_file="$RUNNER_TEMP/provider-stamp-runtime.json"
+          (cd sdb && AZURE_CLIENT_OBJECT_ID="$PROVIDER_PRINCIPAL_ID" python3 -m infrastructure.scripts.build_stamp_parameters \
+            --stage runtime --output "$parameter_file")
+          python3 - "$parameter_file" "$resolved" "$wrapper_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.provider_deployment import wrap_stamp_parameters
+          stamp_parameters = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          resolved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["providerStamp"]
+          wrapped = wrap_stamp_parameters(stamp_parameters, resource_group_name=resolved["resourceGroup"], location=resolved["location"], customer_id=resolved["id"])
+          Path(sys.argv[3]).write_text(json.dumps(wrapped), encoding="utf-8")
+          PY
+          az bicep lint --file sdb/infrastructure/provider-stamp-subscription.bicep
+          az bicep build --file sdb/infrastructure/provider-stamp-subscription.bicep --stdout >/dev/null
+          az deployment sub what-if \
+            --name "provider-stamp-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT-runtime" \
+            --location "${{ needs.resolve.outputs.provider_location }}" \
+            --template-file sdb/infrastructure/provider-stamp-subscription.bicep \
+            --parameters "@$wrapper_file"
+
+  provider_runtime_apply:
+    needs: [resolve, provider_runtime_what_if]
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.provider_runtime_what_if.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: provider-stamp-apply
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB checkout token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Apply provider runtime configuration and wait for certificate
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+          PROVIDER_PRINCIPAL_ID: ${{ needs.resolve.outputs.provider_principal_object_id }}
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+          ACR_NAME: ${{ vars.PROVIDER_ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.PROVIDER_ACR_LOGIN_SERVER }}
+          ACR_RESOURCE_GROUP: ${{ vars.PROVIDER_ACR_RESOURCE_GROUP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation onboard --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          export CUSTOMER_JSON
+          CUSTOMER_JSON=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["providerStamp"]))' "$resolved")
+          export APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID
+          APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["providerStamp"]["deploymentContext"]["applicationInsightsWorkspaceResourceId"])' "$resolved")
+          parameter_file="$RUNNER_TEMP/stamp-runtime.json"
+          wrapper_file="$RUNNER_TEMP/provider-stamp-runtime.json"
+          (cd sdb && AZURE_CLIENT_OBJECT_ID="$PROVIDER_PRINCIPAL_ID" python3 -m infrastructure.scripts.build_stamp_parameters \
+            --stage runtime --output "$parameter_file" \
+            )
+          python3 - "$parameter_file" "$resolved" "$wrapper_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.pipeline.provider_deployment import wrap_stamp_parameters
+          stamp_parameters = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          resolved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["providerStamp"]
+          wrapped = wrap_stamp_parameters(stamp_parameters, resource_group_name=resolved["resourceGroup"], location=resolved["location"], customer_id=resolved["id"])
+          Path(sys.argv[3]).write_text(json.dumps(wrapped), encoding="utf-8")
+          PY
+          deployment="provider-stamp-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT-runtime"
+          az deployment sub create --name "$deployment" \
+            --location "${{ needs.resolve.outputs.provider_location }}" \
+            --template-file sdb/infrastructure/provider-stamp-subscription.bicep \
+            --parameters "@$wrapper_file" --output none
+          az deployment sub show --name "$deployment" --query properties.outputs --output json > "$RUNNER_TEMP/runtime-outputs.json"
+          certificate_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["managedCertificateResourceId"]["value"])' "$RUNNER_TEMP/runtime-outputs.json")
+          state=""
+          for attempt in $(seq 1 40); do
+            state=$(az resource show --ids "$certificate_id" --query properties.provisioningState -o tsv 2>/dev/null || true)
+            [ "$state" = Succeeded ] && break
+            sleep 15
+          done
+          test "$state" = Succeeded || {
+            echo "Managed hostname certificate did not reach Succeeded (state=$state)." >&2
+            exit 1
+          }
+          python3 - "$resolved" "$RUNNER_TEMP/provider-customer.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["providerStamp"]
+          Path(sys.argv[2]).write_text(json.dumps(value), encoding="utf-8")
+          PY
+          (cd sdb && python3 infrastructure/scripts/verify_provider_stamp.py \
+            --customer-json "$RUNNER_TEMP/provider-customer.json" \
+            --subscription-id "$EXPECTED_SUBSCRIPTION_ID" \
+            --acr-name "$ACR_NAME" \
+            --acr-resource-group "$ACR_RESOURCE_GROUP" \
+            --application-insights-workspace-resource-id "$APPLICATION_INSIGHTS_WORKSPACE_RESOURCE_ID")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-runtime-outputs
+          path: ${{ runner.temp }}/runtime-outputs.json
+          retention-days: 1
+
+  collect_handoff:
+    needs: [resolve, sql_migrations, foundation_apply, provider_runtime_apply]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.sql_migrations.result == 'success' && ((inputs.operation == 'onboard' && needs.foundation_apply.result == 'success' && needs.provider_runtime_apply.result == 'success') || inputs.operation == 'release') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create read-only SDB catalog token
+        id: sdb-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: ster-co/SDB-Calculation-v2
+          ref: ${{ inputs.release_version }}
+          path: sdb
+          token: ${{ steps.sdb-app-token.outputs.token }}
+      - name: Prepare applied deployment outputs
+        if: ${{ inputs.operation == 'onboard' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lifecycle-*-outputs
+          path: ${{ runner.temp }}/outputs
+          merge-multiple: true
+      - name: Log in to customer tenant to read foundation outputs
+        if: ${{ inputs.operation == 'release' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.customer_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.customer_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.customer_subscription_id }}
+      - name: Verify customer target and read existing foundation deployment
+        if: ${{ inputs.operation == 'release' }}
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.customer_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.customer_subscription_id }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          az deployment sub show --name "customer-foundation-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT" \
+            --query properties.outputs --output json > "$RUNNER_TEMP/outputs/foundation-outputs.json"
+      - name: Log in to provider tenant to read existing runtime deployment
+        if: ${{ inputs.operation == 'release' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ needs.resolve.outputs.provider_oidc_client_id }}
+          tenant-id: ${{ needs.resolve.outputs.provider_tenant_id }}
+          subscription-id: ${{ needs.resolve.outputs.provider_subscription_id }}
+      - name: Verify provider target and read existing runtime deployment
+        if: ${{ inputs.operation == 'release' }}
+        env:
+          EXPECTED_TENANT_ID: ${{ needs.resolve.outputs.provider_tenant_id }}
+          EXPECTED_SUBSCRIPTION_ID: ${{ needs.resolve.outputs.provider_subscription_id }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from scripts.pipeline.provider_deployment import validate_target
+          tenant = subprocess.check_output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"], text=True).strip()
+          subscription = subprocess.check_output(["az", "account", "show", "--query", "id", "-o", "tsv"], text=True).strip()
+          validate_target(tenant, subscription, os.environ["EXPECTED_TENANT_ID"], os.environ["EXPECTED_SUBSCRIPTION_ID"])
+          PY
+          az deployment sub show --name "provider-stamp-$CUSTOMER_ID-$CUSTOMER_ENVIRONMENT-runtime" \
+            --query properties.outputs --output json > "$RUNNER_TEMP/outputs/runtime-outputs.json"
+      - name: Build the allowlisted versioned app handoff
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          resolved="$RUNNER_TEMP/resolved-lifecycle.json"
+          python3 -m scripts.pipeline.resolve_lifecycle \
+            --catalog config/customers.json --app-catalog sdb/deploy/app-customers.json \
+            --customer-id "$CUSTOMER_ID" --environment "$CUSTOMER_ENVIRONMENT" \
+            --operation "$OPERATION" --release-version "$RELEASE_VERSION" --ref-type "$REF_TYPE" > "$resolved"
+          python3 -m scripts.pipeline.lifecycle_handoff \
+            --resolved-file "$resolved" \
+            --foundation-outputs-file "$RUNNER_TEMP/outputs/foundation-outputs.json" \
+            --runtime-outputs-file "$RUNNER_TEMP/outputs/runtime-outputs.json" \
+            --operation "$OPERATION" --release-version "$RELEASE_VERSION" \
+            --output "$RUNNER_TEMP/customer-lifecycle-handoff.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: customer-lifecycle-handoff-${{ inputs.customer_id }}-${{ inputs.environment }}
+          path: ${{ runner.temp }}/customer-lifecycle-handoff.json
+          if-no-files-found: error
+          retention-days: 1
+
+  dispatch_app_release:
+    needs: [resolve, collect_handoff]
+    if: ${{ needs.resolve.result == 'success' && needs.collect_handoff.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create least-privilege token for SDB workflow dispatch
+        id: dispatch-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYMENT_GITHUB_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ster-co
+          repositories: SDB-Calculation-v2
+          permission-actions: write
+          permission-contents: read
+      - name: Dispatch pinned app-only deployment and wait for completion
+        env:
+          SDB_GITHUB_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/app-dispatch-inputs.json" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          values = {
+              "customer_id": os.environ["CUSTOMER_ID"],
+              "environment": os.environ["CUSTOMER_ENVIRONMENT"],
+              "operation": os.environ["OPERATION"],
+              "release_version": os.environ["RELEASE_VERSION"],
+              "source_repository": os.environ["SOURCE_REPOSITORY"],
+              "source_run_id": os.environ["SOURCE_RUN_ID"],
+          }
+          Path(sys.argv[1]).write_text(json.dumps(values), encoding="utf-8")
+          PY
+          title="lifecycle/$SOURCE_RUN_ID/$CUSTOMER_ID/$CUSTOMER_ENVIRONMENT/$OPERATION/$RELEASE_VERSION"
+          python3 -m scripts.pipeline.github_dispatch \
+            --ref "$RELEASE_VERSION" \
+            --inputs-file "$RUNNER_TEMP/app-dispatch-inputs.json" \
+            --expected-title "$title" \
+            --output-file "$RUNNER_TEMP/app-dispatch-result.json"

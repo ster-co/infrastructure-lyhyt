@@ -16,13 +16,16 @@ class FoundationManifestError(ValueError):
 
 
 _DEPLOYMENT_OUTPUTS = (
+    "createdCustomerResourceGroupName",
     "sqlServerFqdn",
     "sqlDatabaseName",
     "searchEndpoint",
     "aiEndpoint",
     "documentIntelligenceEndpoint",
+    "gpt5DeploymentName",
     "gpt54DeploymentName",
-    "gpt5MiniDeploymentName",
+    "gpt41MiniDeploymentName",
+    "gpt41NanoDeploymentName",
     "textEmbedding3LargeDeploymentName",
 )
 _SEARCH_OUTPUTS = {
@@ -170,12 +173,23 @@ def build_customer_foundation_manifest(
         raise FoundationManifestError("sqlServerFqdn must be an Azure SQL server FQDN")
     if "sqlDatabaseName" in outputs and _DATABASE_NAME.fullmatch(outputs["sqlDatabaseName"]) is None:
         raise FoundationManifestError("sqlDatabaseName is invalid")
-    for field in ("gpt54DeploymentName", "gpt5MiniDeploymentName", "textEmbedding3LargeDeploymentName"):
+    for field in (
+        "gpt5DeploymentName",
+        "gpt54DeploymentName",
+        "gpt41MiniDeploymentName",
+        "gpt41NanoDeploymentName",
+        "textEmbedding3LargeDeploymentName",
+    ):
         if field in outputs and _RESOURCE_NAME.fullmatch(outputs[field]) is None:
             raise FoundationManifestError(f"{field} is invalid")
     for field in ("searchEndpoint", "aiEndpoint", "documentIntelligenceEndpoint"):
         if field in outputs:
             _https_endpoint(outputs[field], field)
+    if (
+        "createdCustomerResourceGroupName" in outputs
+        and _RESOURCE_NAME.fullmatch(outputs["createdCustomerResourceGroupName"]) is None
+    ):
+        raise FoundationManifestError("createdCustomerResourceGroupName is invalid")
 
     if search_configuration_applied:
         if (

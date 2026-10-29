@@ -4,6 +4,10 @@ param tags object
 param enableSearchService bool = true
 param enableSearchConfiguration bool = true
 param searchConfigurationPrincipalObjectId string = ''
+param skuName string = 'basic'
+param replicaCount int = 1
+param partitionCount int = 1
+param semanticSearch string = 'free'
 
 @allowed([
   'Enabled'
@@ -19,7 +23,7 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if
     type: 'SystemAssigned'
   }
   sku: {
-    name: 'basic'
+    name: skuName
   }
   properties: {
     authOptions: {
@@ -31,10 +35,10 @@ resource searchService 'Microsoft.Search/searchServices@2026-03-01-preview' = if
       bypass: 'None'
       ipRules: []
     }
-    partitionCount: 1
+    partitionCount: partitionCount
     publicNetworkAccess: publicNetworkAccess
-    replicaCount: 1
-    semanticSearch: 'standard'
+    replicaCount: replicaCount
+    semanticSearch: semanticSearch
   }
 }
 

@@ -127,14 +127,18 @@ class SearchConfigurationApplyTests(unittest.TestCase):
         module = load_apply_module(self)
         self.assertTrue(
             module.should_apply_search_configuration(
-                "tst", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}
+                "tst", {
+                    "enableSearchService": True,
+                    "publicNetworkAccess": "Disabled",
+                    "networkSettings": {"search": {"publicNetworkAccess": "Enabled"}},
+                }
             )
         )
         for environment, parameters in (
-            ("acc", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}),
-            ("tst", {"enableSearchService": False, "publicNetworkAccess": "Enabled"}),
-            ("tst", {"publicNetworkAccess": "Enabled"}),
-            ("tst", {"enableSearchService": True, "publicNetworkAccess": "Disabled"}),
+            ("acc", {"enableSearchService": True, "networkSettings": {"search": {"publicNetworkAccess": "Enabled"}}}),
+            ("tst", {"enableSearchService": False, "networkSettings": {"search": {"publicNetworkAccess": "Enabled"}}}),
+            ("tst", {"enableSearchService": True, "publicNetworkAccess": "Enabled", "networkSettings": {"search": {"publicNetworkAccess": "Disabled"}}}),
+            ("tst", {"enableSearchService": True, "publicNetworkAccess": "Enabled"}),
         ):
             with self.subTest(environment=environment, parameters=parameters):
                 self.assertFalse(module.should_apply_search_configuration(environment, parameters))

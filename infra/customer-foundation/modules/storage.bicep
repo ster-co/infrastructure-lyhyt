@@ -2,6 +2,7 @@ param storageAccountName string
 param location string
 param tags object
 param containerNames array
+param skuName string = 'Standard_GRS'
 
 @allowed([
   'Enabled'
@@ -21,7 +22,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
   tags: tags
   kind: 'StorageV2'
   sku: {
-    name: 'Standard_LRS'
+    name: skuName
   }
   properties: {
     accessTier: 'Hot'

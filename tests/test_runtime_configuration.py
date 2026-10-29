@@ -21,7 +21,7 @@ class RuntimeConfigurationTests(unittest.TestCase):
                 "aiEndpoint": {"value": "https://customer.openai.azure.com/"},
                 "searchEndpoint": {"value": "https://customer.search.windows.net"},
                 "gpt54DeploymentName": {"value": "gpt-5.4"},
-                "gpt5MiniDeploymentName": {"value": "gpt-5-mini"},
+                "gpt41MiniDeploymentName": {"value": "gpt-4.1-mini"},
                 "textEmbedding3LargeDeploymentName": {"value": "text-embedding-3-large"},
             },
             {
@@ -45,6 +45,7 @@ class RuntimeConfigurationTests(unittest.TestCase):
         self.assertEqual(self.values["azure-openai-endpoint"].value, "https://customer.openai.azure.com/")
         self.assertEqual(self.values["azure-search-service-endpoint"].value, "https://customer.search.windows.net")
         self.assertEqual(self.values["llm-model-full"].value, "gpt-5.4")
+        self.assertEqual(self.values["llm-model-fast"].value, "gpt-4.1-mini")
         self.assertEqual(self.values["sp-tenant-id"].value, "11111111-1111-1111-1111-111111111111")
         self.assertEqual(
             self.values["extraction-endpoint"].value,

@@ -7,6 +7,10 @@ param sqlEntraAdministratorObjectId string
 param sqlEntraAdministratorPrincipalType string
 param sqlEntraAdministratorTenantId string
 param sqlEntraOnlyAuthentication bool = true
+param databaseSku object
+param backupStorageRedundancy string = 'GeoZone'
+param databaseZoneRedundant bool = true
+param databaseReadScale string = 'Enabled'
 
 @allowed([
   'Enabled'
@@ -39,22 +43,19 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2025-02-01-preview' = {
   name: sqlDatabaseName
   location: location
   sku: {
-    capacity: 1
-    family: 'Gen5'
-    name: 'GP_S_Gen5_1'
-    tier: 'GeneralPurpose'
+    capacity: databaseSku.capacity
+    family: databaseSku.family
+    name: databaseSku.name
+    tier: databaseSku.tier
   }
   properties: {
-    autoPauseDelay: 60
     availabilityZone: 'NoPreference'
     catalogCollation: 'SQL_Latin1_General_CP1_CI_AS'
     collation: 'SQL_Latin1_General_CP1_CI_AS'
     isLedgerOn: false
-    maxSizeBytes: 4294967296
-    minCapacity: json('0.5')
-    readScale: 'Disabled'
-    requestedBackupStorageRedundancy: 'Geo'
-    zoneRedundant: false
+    readScale: databaseReadScale
+    requestedBackupStorageRedundancy: backupStorageRedundancy
+    zoneRedundant: databaseZoneRedundant
   }
 }
 

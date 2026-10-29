@@ -1,5 +1,10 @@
 # Customer foundation onboarding
 
+> For new customers and coordinated application releases, use the
+> [Customer lifecycle workflow](../../.github/workflows/customer-lifecycle.yml)
+> and its [end-to-end guide](../customer-lifecycle.md). This standalone
+> foundation workflow is retained for reviewed maintenance and migration runs.
+
 This guide covers the customer-side identity, permissions, configuration, and
 deployment steps for
 [`.github/workflows/customer-foundation.yml`](../../.github/workflows/customer-foundation.yml).
