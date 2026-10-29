@@ -43,12 +43,15 @@ placement are catalog parameters.
    catalog. The customer identity needs the roles required by the foundation
    Bicep and Entra SQL migrations. The provider identity needs the reviewed
    resource-group, deployment, and role-assignment rights used by the stamp.
-3. Protect the `customer-foundation-apply`, `provider-stamp-apply`, and
-   `provider-prerequisites-ready` environments with required reviewers. The
-   first two require the matching OIDC environment subject as well as branch
-   subjects for preflight jobs. The prerequisites environment is an operator
-   checkpoint after the provider Key Vault and Container Apps environment
-   exist. Configure the `LYHYT` environment in
+3. Protect the `customer-foundation-apply`, `customer-sql-ready`,
+   `provider-stamp-apply`, and `provider-prerequisites-ready` environments with
+   required reviewers. The apply environments require the matching OIDC
+   environment subject as well as branch subjects for preflight jobs. The SQL
+   checkpoint is approved only after the customer Entra migration principal
+   has a contained user and the narrow migration permissions documented in
+   `docs/database/migrations/README.md`. The provider prerequisites environment
+   is an operator checkpoint after the provider Key Vault and Container Apps
+   environment exist. Configure the `LYHYT` environment in
    `SDB-Calculation-v2` for the per-customer deployment identity federation.
 4. Configure these infrastructure repository secrets:
    `DEPLOYMENT_GITHUB_APP_ID`, `DEPLOYMENT_GITHUB_APP_PRIVATE_KEY`, and
@@ -94,19 +97,23 @@ these stages in order:
 2. Run customer-foundation Bicep lint/build/what-if. The protected
    `customer-foundation-apply` environment gates the apply in the customer
    tenant.
-3. Apply SQL migrations with an Entra access token, then configure the customer
+3. After foundation apply, have the customer SQL administrator create the
+   contained database user for the catalogued Entra migration principal and
+   grant only the documented migration permissions. Approve the
+   `customer-sql-ready` environment checkpoint after that access is verified.
+4. Apply SQL migrations with an Entra access token, then configure the customer
    Search indexes and data objects.
-4. Run provider-stamp foundation what-if and gated apply. This creates the
+5. Run provider-stamp foundation what-if and gated apply. This creates the
    provider resource group, Key Vault, and customer deployment identity. The
    `provider-prerequisites-ready` environment pauses for operator DNS and secret
    hydration now that the Key Vault and Container Apps environment exist.
-5. Check provider DNS and Key Vault prerequisites. Run provider runtime
+6. Check provider DNS and Key Vault prerequisites. Run provider runtime
    what-if and gated apply for Function Apps, Container Apps, monitoring,
    managed certificate, hostname binding, and scoped roles.
-6. Verify Key Vault/certificate readiness and publish an allowlisted,
+7. Verify Key Vault/certificate readiness and publish an allowlisted,
    versioned, non-secret handoff artifact containing only deployment targets,
    safe Bicep outputs, and approved runtime settings.
-7. Dispatch the pinned SDB app-only workflow with a least-privilege GitHub App
+8. Dispatch the pinned SDB app-only workflow with a least-privilege GitHub App
    token and wait for its result. It deploys Document Parser, extraction, Mail
    Triage, API, and Docling Worker, then verifies Functions, ingress, scaling,
    health, certificate, and deployment identity access.

@@ -346,9 +346,29 @@ jobs:
           path: ${{ runner.temp }}/foundation-outputs.json
           retention-days: 1
 
-  sql_migrations:
+  customer_sql_ready:
+    name: Confirm customer SQL migration access is ready
     needs: [resolve, foundation_apply]
-    if: ${{ always() && needs.resolve.result == 'success' && (inputs.operation == 'release' || needs.foundation_apply.result == 'success') }}
+    if: ${{ inputs.operation == 'onboard' && needs.resolve.result == 'success' && needs.foundation_apply.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: customer-sql-ready
+    steps:
+      - name: Record SQL migration access approval
+        env:
+          CUSTOMER_ID: ${{ inputs.customer_id }}
+          CUSTOMER_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          {
+            echo "## Customer SQL migration access approved"
+            echo "- Customer: \`$CUSTOMER_ID\`"
+            echo "- Environment: \`$CUSTOMER_ENVIRONMENT\`"
+            echo "- Approval confirms the customer Entra migration principal has a contained database user with the documented migration permissions."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sql_migrations:
+    needs: [resolve, foundation_apply, customer_sql_ready]
+    if: ${{ always() && needs.resolve.result == 'success' && (inputs.operation == 'release' || (needs.foundation_apply.result == 'success' && needs.customer_sql_ready.result == 'success')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
